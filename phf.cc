@@ -30,19 +30,16 @@
 #include <string.h>   /* memset(3) */
 #include <errno.h>    /* errno */
 #include <assert.h>   /* assert(3) */
+#include <string>     /* std::string */
 
-/* debugging */
-#include <stdio.h>    /* FILE fprintf(3) */
+#include "phf.h"
+
 
 #if defined __clang__
 #pragma clang diagnostic ignored "-Wunused-function"
 #else
 #pragma GCC diagnostic ignored "-Wunused-function"
 #endif
-
-#include <string>
-
-#include "phf.h"
 
 
 /*
@@ -61,6 +58,13 @@
 
 /*
  * M O D U L A R  A R I T H M E T I C  R O U T I N E S
+ *
+ * Two modular reduction schemes are supported: bitwise AND and naive
+ * modular division. For bitwise AND we must round up the values r and m to
+ * a power of 2.
+ *
+ * TODO: Implement and test Barrett reduction as alternative to naive
+ * modular division.
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -85,6 +89,9 @@ static inline size_t phf_powerup(size_t i) {
 
 /*
  * B I T M A P  R O U T I N E S
+ *
+ * We use a bitmap to track output hash occupancy when searching for
+ * displacement values.
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -112,6 +119,11 @@ static inline void phf_clrall(phf_bits_t *set, size_t n) {
  *
  * Universal hash based on MurmurHash3_x86_32. Variants for 32- and 64-bit
  * integer keys, and string keys.
+ *
+ * We use a random seed to address the non-cryptographic-strength collision
+ * resistance of MurmurHash3. A stronger hash like SipHash is just too slow
+ * and unnecessary for my particular needs. For some environments a
+ * cryptographically stronger hash may be prudent.
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -176,6 +188,23 @@ static inline uint32_t phf_mix32(uint32_t h1) {
 } /* phf_mix32() */
 
 
+/*
+ * g(k) & f(d, k)  S P E C I A L I Z A T I O N S
+ *
+ * For every key we first calculate g(k). Then for every group of collisions
+ * from g(k) we search for a displacement value d such that f(d, k) places
+ * each key into a unique hash slot.
+ *
+ * g() and f() are specialized for 32-bit, 64-bit, and string keys.
+ *
+ * g_mod_r() and f_mod_n() are specialized for the method of modular
+ * reduction--modular division or bitwise AND. bitwise AND is substantially
+ * faster than modular division, and more than makes up for any space
+ * inefficiency, particularly for small hash tables.
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+/* 32-bit, phf_string_t, and std::string keys */
 template<typename T>
 static inline uint32_t phf_g(T k, uint32_t seed) {
 	uint32_t h1 = seed;
@@ -196,6 +225,7 @@ static inline uint32_t phf_f(uint32_t d, T k, uint32_t seed) {
 } /* phf_f() */
 
 
+/* 64-bit keys */
 static inline uint32_t phf_g(uint64_t k, uint32_t seed) {
 	uint32_t h1 = seed;
 
@@ -216,17 +246,34 @@ static inline uint32_t phf_f(uint32_t d, uint64_t k, uint32_t seed) {
 } /* phf_f() */
 
 
+/* g() and f() which parameterize modular reduction */
 template<bool nodiv, typename T>
 static inline uint32_t phf_g_mod_r(T k, uint32_t seed, size_t r) {
 	return (nodiv)? (phf_g(k, seed) & (r - 1)) : (phf_g(k, seed) % r);
 } /* phf_g_mod_r() */
-
 
 template<bool nodiv, typename T>
 static inline uint32_t phf_f_mod_m(uint32_t d, T k, uint32_t seed, size_t m) {
 	return (nodiv)? (phf_f(d, k, seed) & (m - 1)) : (phf_f(d, k, seed) % m);
 } /* phf_f_mod_m() */
 
+
+/*
+ * B U C K E T  S O R T I N G  I N T E R F A C E S
+ *
+ * For every key [0..n) we calculate g(k) % r, where 0 < r <= n, and
+ * associate it with a bucket [0..r). We then sort the buckets in decreasing
+ * order according to the number of keys. The sorting is required for both
+ * optimal time complexity when calculating f(d, k) (less contention) and
+ * optimal space complexity (smaller d).
+ *
+ * The actual sorting is done in the core routine. The buckets are organized
+ * and sorted as a 1-dimensional array to minimize run-time memory (less
+ * data structure overhead) and improve data locality (less pointer
+ * indirection). The following section merely implements a templated
+ * bucket-key structure and the comparison routine passed to qsort(3).
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 static bool operator==(const phf_string_t &a, const phf_string_t &b) {
 	return a.n == b.n && 0 == memcmp(a.p, b.p, a.n);
@@ -237,72 +284,40 @@ struct phf_key {
 	T k;
 	phf_hash_t g; /* result of g(k) % r */
 	size_t *n;  /* number of keys in bucket g */
-
-	static int cmp(const phf_key<T>* a, const phf_key<T>* b) {
-		if (*(a->n) > *(b->n))
-			return -1;
-		if (*(a->n) < *(b->n))
-			return 1;
-		if (a->g > b->g)
-			return -1;
-		if (a->g < b->g)
-			return 1;
-
-		/* duplicate key? */
-		if (a->k == b->k && a != b) {
-			assert(!(a->k == b->k));
-			abort(); /* if NDEBUG defined */
-		}
-
-		return 0;
-	}
-
-	static void print(phf_key<std::string>& k, FILE *fp) {
-		fprintf(fp, "k:%-32.*s g:%.8"PHF_PRIuHASH" n:%.8zu", static_cast<int>(k.k.length()), k.k.c_str(), k.g, *(k.n));
-	}
-
-	static void print(phf_key<phf_string_t>& k, FILE *fp) {
-		fprintf(fp, "k:%-32.*s g:%.8"PHF_PRIuHASH" n:%.8zu", static_cast<int>(k.k.n), static_cast<char *>(k.k.p), k.g, *(k.n));
-	}
-
-	static void print(phf_key<uint32_t>& k, FILE *fp) {
-		fprintf(fp, "k:0x%.8"PRIx32" g:%.8"PHF_PRIuHASH" n:%.8zu", k.k, k.g, *(k.n));
-	}
-
-	static void print(phf_key<uint64_t>& k, FILE *fp) {
-		fprintf(fp, "k:0x%.16"PRIx64" g:%.8"PHF_PRIuHASH" n:%.8zu", k.k, k.g, *(k.n));
-	}
-
-	static void print(phf_key<T>* k, size_t n, bool sorted, FILE *fp) {
-		size_t b_n = 0;
-		phf_hash_t g_prv = 0;
-		size_t n_max = 0;
-
-		for (size_t i = 0; i < n; i++) {
-			b_n += (i == 0) || (i > 0 && k[i].g != g_prv);
-			g_prv = k[i].g;
-			n_max = PHF_MAX(n_max, *k[i].n);
-
-			phf_key<T>::print(k[i], fp);
-			fputc('\n', fp);
-		}
-
-		if (sorted) {
-			fprintf(fp, "-- %zu keys in %zu buckets (n_max:%zu)\n", n, b_n, n_max);
-		} else {
-			fprintf(fp, "-- %zu keys in unsorted buckets\n", n);
-		}
-	}
 }; /* struct phf_key */
+
+template<typename T>
+static int phf_keycmp(const phf_key<T> *a, const phf_key<T> *b) {
+	if (*(a->n) > *(b->n))
+		return -1;
+	if (*(a->n) < *(b->n))
+		return 1;
+	if (a->g > b->g)
+		return -1;
+	if (a->g < b->g)
+		return 1;
+
+	/* duplicate key? */
+	if (a->k == b->k && a != b) {
+		assert(!(a->k == b->k));
+		abort(); /* if NDEBUG defined */
+	}
+
+	return 0;
+} /* phf_keycmp() */
 
 
 /*
- * C O R E  R O U T I N E S
+ * C O R E  F U N C T I O N  G E N E R A T O R
+ *
+ * The entire algorithm is contained in PHF:init. Everything else in this
+ * source file is either a simple utility routine used by PHF:init, or an
+ * interface to PHF:init or the generated function state.
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-template<bool nodiv, typename key_t>
-static int phf_init(struct phf *phf, const key_t k[], const size_t n, const size_t l, const size_t a, const uint32_t seed) {
+template<typename key_t, bool nodiv>
+int PHF::init(struct phf *phf, const key_t k[], const size_t n, const size_t l, const size_t a, const uint32_t seed) {
 	size_t n1 = PHF_MAX(n, 1); /* for computations that require n > 0 */
 	size_t l1 = PHF_MAX(l, 1);
 	size_t a1 = PHF_MAX(PHF_MIN(a, 100), 1);
@@ -342,14 +357,22 @@ static int phf_init(struct phf *phf, const key_t k[], const size_t n, const size
 		++*B_k[i].n;
 	}
 
-	//phf_key<key_t>::print(B_k, n, 0, stderr);
-	qsort(B_k, n1, sizeof *B_k, reinterpret_cast<int(*)(const void *, const void *)>(&phf_key<key_t>::cmp));
-	//phf_key<key_t>::print(B_k, n, 1, stderr);
+	qsort(B_k, n1, sizeof *B_k, reinterpret_cast<int(*)(const void *, const void *)>(&phf_keycmp<key_t>));
 
 	T_n = PHF_HOWMANY(m, PHF_BITS(*T));
 	if (!(T = static_cast<phf_bits_t *>(calloc(T_n * 2, sizeof *T))))
 		goto syerr;
 	T_b = &T[T_n]; /* share single allocation */
+
+	/*
+	 * FIXME: T_b[] is unnecessary. We could clear T[] the same way we
+	 * clear T_b[]. In fact, at the end of generation T_b[] is identical
+	 * to T[] because we don't clear T_b[] on success.
+	 *
+	 * We just need to tweak the current reset logic to stop before the
+	 * key that failed, and then we can elide the commit to T[] at the
+	 * end of the outer loop.
+	 */
 
 	if (!(g = static_cast<uint32_t *>(calloc(r, sizeof *g))))
 		goto syerr;
@@ -414,11 +437,22 @@ clean:
 	free(B_k);
 
 	return error;
-} /* phf_init() */
+} /* PHF::init() */
+
+
+/*
+ * F U N C T I O N  G E N E R A T O R  &  S T A T E  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+template int PHF::init<uint32_t, true>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const uint32_t);
+template int PHF::init<uint64_t, true>(struct phf *, const uint64_t[], const size_t, const size_t, const size_t, const uint32_t);
+template int PHF::init<phf_string_t, true>(struct phf *, const phf_string_t[], const size_t, const size_t, const size_t, const uint32_t);
+template int PHF::init<std::string, true>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const uint32_t);
 
 
 template<typename T>
-static uint32_t phf_hash(struct phf *phf, T k) {
+uint32_t PHF::hash(struct phf *phf, T k) {
 	if (phf->nodiv) {
 		uint32_t d = phf->g[phf_g(k, phf->seed) & (phf->r - 1)];
 
@@ -428,7 +462,7 @@ static uint32_t phf_hash(struct phf *phf, T k) {
 
 		return phf_f(d, k, phf->seed) % phf->m;
 	}
-} /* phf_hash() */
+} /* PHF::hash() */
 
 
 void phf_destroy(struct phf *phf) {
@@ -591,7 +625,7 @@ static inline void exec(int argc, char **argv, size_t lambda, size_t alpha, size
 		warnx("loaded %zu keys", n);
 
 	begin = clock();
-	phf_init<nodiv>(&phf, k, n, lambda, alpha, seed);
+	PHF::init<T, nodiv>(&phf, k, n, lambda, alpha, seed);
 	end = clock();
 
 	if (verbose) {
@@ -606,7 +640,7 @@ static inline void exec(int argc, char **argv, size_t lambda, size_t alpha, size
 
 		begin = clock();
 		for (size_t i = 0; i < n; i++) {
-			x += phf_hash(&phf, k[i]);
+			x += PHF::hash(&phf, k[i]);
 		}
 		end = clock();
 
@@ -615,7 +649,7 @@ static inline void exec(int argc, char **argv, size_t lambda, size_t alpha, size
 
 	if (!noprint) {
 		for (size_t i = 0; i < n; i++) {
-			printkey(k[i], phf_hash(&phf, k[i]));
+			printkey(k[i], PHF::hash(&phf, k[i]));
 		}
 	}
 
