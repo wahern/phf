@@ -450,9 +450,8 @@ template int PHF::init<uint64_t, true>(struct phf *, const uint64_t[], const siz
 template int PHF::init<phf_string_t, true>(struct phf *, const phf_string_t[], const size_t, const size_t, const size_t, const uint32_t);
 template int PHF::init<std::string, true>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const uint32_t);
 
-
 template<typename T>
-uint32_t PHF::hash(struct phf *phf, T k) {
+phf_hash_t PHF::hash(struct phf *phf, T k) {
 	if (phf->nodiv) {
 		uint32_t d = phf->g[phf_g(k, phf->seed) & (phf->r - 1)];
 
@@ -464,10 +463,52 @@ uint32_t PHF::hash(struct phf *phf, T k) {
 	}
 } /* PHF::hash() */
 
+template phf_hash_t PHF::hash<uint32_t>(struct phf *, uint32_t);
+template phf_hash_t PHF::hash<uint64_t>(struct phf *, uint64_t);
+template phf_hash_t PHF::hash<phf_string_t>(struct phf *, phf_string_t);
+template phf_hash_t PHF::hash<std::string>(struct phf *, std::string);
 
-void phf_destroy(struct phf *phf) {
+void PHF::destroy(struct phf *phf) {
 	free(phf->g);
 	phf->g = NULL;
+} /* PHF::destroy() */
+
+
+int phf_init_uint32(struct phf *phf, uint32_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
+	if (nodiv)
+		return PHF::init<uint32_t, true>(phf, k, n, lambda, alpha, seed);
+	else
+		return PHF::init<uint32_t, false>(phf, k, n, lambda, alpha, seed);
+} /* phf_init_uint32() */
+
+int phf_init_uint64(struct phf *phf, uint64_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
+	if (nodiv)
+		return PHF::init<uint64_t, true>(phf, k, n, lambda, alpha, seed);
+	else
+		return PHF::init<uint64_t, false>(phf, k, n, lambda, alpha, seed);
+} /* phf_init_uint64() */
+
+int phf_init_string(struct phf *phf, phf_string_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
+	if (nodiv)
+		return PHF::init<phf_string_t, true>(phf, k, n, lambda, alpha, seed);
+	else
+		return PHF::init<phf_string_t, false>(phf, k, n, lambda, alpha, seed);
+} /* phf_init_string() */
+
+phf_hash_t phf_hash_uint32(struct phf *phf, uint32_t k) {
+	return PHF::hash(phf, k);
+} /* phf_hash_uint32() */
+
+phf_hash_t phf_hash_uint64(struct phf *phf, uint64_t k) {
+	return PHF::hash(phf, k);
+} /* phf_hash_uint64() */
+
+phf_hash_t phf_hash_string(struct phf *phf, phf_string_t k) {
+	return PHF::hash(phf, k);
+} /* phf_hash_string() */
+
+void phf_destroy(struct phf *phf) {
+	PHF::destroy(phf);
 } /* phf_destroy() */
 
 
