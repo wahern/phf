@@ -45,6 +45,13 @@
 #define phf_has_extension(x) 0
 #endif
 
+#ifndef PHF_HAVE_NOEXCEPT
+#define PHF_HAVE_NOEXCEPT \
+	(__cplusplus >= 201103L || \
+	 phf_has_extension(cxx_noexcept) || \
+	 PHF_GNUC_PREREQ(4, 6))
+#endif
+
 #ifndef PHF_HAVE_GENERIC
 #define PHF_HAVE_GENERIC \
 	(__STDC_VERSION__ >= 201112L || \
