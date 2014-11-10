@@ -35,10 +35,17 @@
 #include "phf.h"
 
 
-#if defined __clang__
+#ifdef __clang__
 #pragma clang diagnostic ignored "-Wunused-function"
-#else
+#if __cplusplus < 201103L
+#pragma clang diagnostic ignored "-Wc++11-long-long"
+#endif
+#elif PHF_GNUC_PREREQ(4, 6)
 #pragma GCC diagnostic ignored "-Wunused-function"
+#if __cplusplus < 201103L
+#pragma GCC diagnostic ignored "-Wlong-long"
+#pragma GCC diagnostic ignored "-Wformat" // %zu
+#endif
 #endif
 
 
@@ -317,7 +324,7 @@ static int phf_keycmp(const phf_key<T> *a, const phf_key<T> *b) {
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 template<typename key_t, bool nodiv>
-int PHF::init(struct phf *phf, const key_t k[], const size_t n, const size_t l, const size_t a, const uint32_t seed) {
+int PHF::init(struct phf *phf, const key_t k[], const size_t n, const size_t l, const size_t a, const phf_seed_t seed) {
 	size_t n1 = PHF_MAX(n, 1); /* for computations that require n > 0 */
 	size_t l1 = PHF_MAX(l, 1);
 	size_t a1 = PHF_MAX(PHF_MIN(a, 100), 1);
@@ -445,10 +452,15 @@ clean:
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-template int PHF::init<uint32_t, true>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const uint32_t);
-template int PHF::init<uint64_t, true>(struct phf *, const uint64_t[], const size_t, const size_t, const size_t, const uint32_t);
-template int PHF::init<phf_string_t, true>(struct phf *, const phf_string_t[], const size_t, const size_t, const size_t, const uint32_t);
-template int PHF::init<std::string, true>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const uint32_t);
+template int PHF::init<uint32_t, true>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+template int PHF::init<uint64_t, true>(struct phf *, const uint64_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+template int PHF::init<phf_string_t, true>(struct phf *, const phf_string_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+template int PHF::init<std::string, true>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const phf_seed_t);
+
+template int PHF::init<uint32_t, false>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+template int PHF::init<uint64_t, false>(struct phf *, const uint64_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+template int PHF::init<phf_string_t, false>(struct phf *, const phf_string_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+template int PHF::init<std::string, false>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const phf_seed_t);
 
 template<typename T>
 phf_hash_t PHF::hash(struct phf *phf, T k) {
@@ -639,16 +651,16 @@ static void addkeys(phf_string_t **k, size_t *n, size_t *z, FILE *fp, char **dat
 
 
 static inline void printkey(phf_string_t &k, phf_hash_t hash) {
-	printf("%-32.*s : %"PHF_PRIuHASH"\n", (int)k.n, (char *)k.p, hash);
+	printf("%-32.*s : %" PHF_PRIuHASH "\n", (int)k.n, (char *)k.p, hash);
 } /* printkey() */
 
 static inline void printkey(std::string &k, phf_hash_t hash) {
-	printf("%-32s : %"PHF_PRIuHASH"\n", k.c_str(), hash);
+	printf("%-32s : %" PHF_PRIuHASH "\n", k.c_str(), hash);
 } /* printkey() */
 
 template<typename T>
 static inline void printkey(T k, phf_hash_t hash) {
-	printf("%llu : %"PHF_PRIuHASH"\n", (unsigned long long)k, hash);
+	printf("%llu : %" PHF_PRIuHASH "\n", (unsigned long long)k, hash);
 } /* printkey() */
 
 template<typename T, bool nodiv>
@@ -711,7 +723,7 @@ int main(int argc, char **argv) {
 	enum {
 		PHF_UINT32,
 		PHF_UINT64,
-		PHF_STRING,
+		PHF_STRING
 	} type = PHF_UINT32;
 	extern char *optarg;
 	extern int optind;

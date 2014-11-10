@@ -31,6 +31,55 @@
 #include <stdbool.h>  /* bool */
 #include <inttypes.h> /* PRIu32 PRIx32 */
 
+
+/*
+ * C O M P I L E R  F E A T U R E S  &  D I A G N O S T I C S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#define PHF_GNUC_PREREQ(M, m) (__GNUC__ > (M) || (__GNUC__ == (M) && __GNUC_MINOR__ >= (m)))
+
+#ifdef __clang__
+#define phf_has_extension(x) __has_extension(x)
+#else
+#define phf_has_extension(x) 0
+#endif
+
+#ifndef PHF_HAVE_GENERIC
+#define PHF_HAVE_GENERIC \
+	(__STDC_VERSION__ >= 201112L || \
+	 phf_has_extension(c_generic_selections) || \
+	 PHF_GNUC_PREREQ(4, 9))
+#endif
+
+#ifndef PHF_HAVE_BUILTIN_TYPES_COMPATIBLE_P
+#define PHF_HAVE_BUILTIN_TYPES_COMPATIBLE_P (defined __GNUC__)
+#endif
+
+#ifndef PHF_HAVE_BUILTIN_CHOOSE_EXPR
+#define PHF_HAVE_BUILTIN_CHOOSE_EXPR (defined __GNUC__)
+#endif
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#if __cplusplus < 201103L
+#pragma clang diagnostic ignored "-Wc++11-extensions"
+#pragma clang diagnostic ignored "-Wvariadic-macros"
+#endif
+#elif PHF_GNUC_PREREQ(4, 6)
+#pragma GCC diagnostic push
+#if __cplusplus < 201103L
+#pragma GCC diagnostic ignored "-Wpedantic"
+#pragma GCC diagnostic ignored "-Wvariadic-macros"
+#endif
+#endif
+
+
+/*
+ * C / C + +  S H A R E D  T Y P E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 #define phf_error_t int /* for documentation purposes */
 
 #define PHF_HASH_MAX UINT32_MAX
@@ -57,6 +106,11 @@ struct phf {
 	size_t d_max; /* maximum displacement value in g */
 }; /* struct phf */
 
+
+/*
+ * C + +  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #ifdef __cplusplus
 
 #include <string> /* std::string */
@@ -69,12 +123,17 @@ namespace PHF {
 	phf_hash_t hash(struct phf *, key_t);
 
 	void destroy(struct phf *);
-};
+}
 
-extern template phf_error_t PHF::init<uint32_t, true>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const uint32_t);
-extern template phf_error_t PHF::init<uint64_t, true>(struct phf *, const uint64_t[], const size_t, const size_t, const size_t, const uint32_t);
-extern template phf_error_t PHF::init<phf_string_t, true>(struct phf *, const phf_string_t[], const size_t, const size_t, const size_t, const uint32_t);
-extern template phf_error_t PHF::init<std::string, true>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const uint32_t);
+extern template phf_error_t PHF::init<uint32_t, true>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+extern template phf_error_t PHF::init<uint64_t, true>(struct phf *, const uint64_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+extern template phf_error_t PHF::init<phf_string_t, true>(struct phf *, const phf_string_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+extern template phf_error_t PHF::init<std::string, true>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const phf_seed_t);
+
+extern template phf_error_t PHF::init<uint32_t, false>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+extern template phf_error_t PHF::init<uint64_t, false>(struct phf *, const uint64_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+extern template phf_error_t PHF::init<phf_string_t, false>(struct phf *, const phf_string_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+extern template phf_error_t PHF::init<std::string, false>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const phf_seed_t);
 
 extern template phf_hash_t PHF::hash<uint32_t>(struct phf *, uint32_t);
 extern template phf_hash_t PHF::hash<uint64_t>(struct phf *, uint64_t);
@@ -83,6 +142,11 @@ extern template phf_hash_t PHF::hash<std::string>(struct phf *, std::string);
 
 #endif /* __cplusplus */
 
+
+/*
+ * C 8 9  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -101,28 +165,11 @@ void phf_destroy(struct phf *);
 }
 #endif
 
-#ifndef PHF_HAVE_GENERIC
 
-#ifdef __clang__
-#define phf_has_feature(x) __has_feature(x)
-#else
-#define phf_has_feature(x) 0
-#endif
-
-#define PHF_HAVE_GENERIC \
-	(__STD_VERSION__ >= 201112L || \
-	 (defined __clang__ && phf_has_feature(c_generic_selections)) || \
-	 (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 9)))
-#endif
-
-#ifndef PHF_HAVE_BUILTIN_TYPES_COMPATIBLE_P
-#define PHF_HAVE_BUILTIN_TYPES_COMPATIBLE_P (defined __GNUC__)
-#endif
-
-#ifndef PHF_HAVE_BUILTIN_CHOOSE_EXPR
-#define PHF_HAVE_BUILTIN_CHOOSE_EXPR (defined __GNUC__)
-#endif
-
+/*
+ * C 1 1 / G N U  I N T E R F A C E S
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #if PHF_HAVE_GENERIC
 
 #define phf_init(f, k, ...) _Generic((k), \
@@ -150,6 +197,13 @@ void phf_destroy(struct phf *);
 	phf_choose(phf_istype((k), uint64_t), phf_hash_uint64((f), (k)), \
 	phf_choose(phf_istype((k), phf_string_t), phf_hash_string((f), (k)))), (void)0) \
 
+#endif
+
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#elif PHF_GNUC_PREREQ(4, 6)
+#pragma GCC diagnostic pop
 #endif
 
 #endif /* PHF_H */
