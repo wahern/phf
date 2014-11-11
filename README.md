@@ -55,35 +55,39 @@ Note that the modules for Lua 5.1, 5.2, and 5.3 can be built simultaneously.
 
 ## API ###
 
-### phf.new(keys[, lamba][, alpha][, seed][, nodiv]) ###
+### phf.new(keys[, lambda][, alpha][, seed][, nodiv]) ###
 
-* keys:array: array of keys in order from 1..#keys. They should be all numbers or
-  all strings. Because the underlying C++ implementation does not tolerate
-  duplicate keys (could enter an infinite loop if your unlucky, or raise
-  SIGABORT if your lucky), an intermediate hash is first built to filter out
-  duplicates.
+* keys: array of keys in order from 1..#keys. They should be all
+  numbers or all strings. Because the underlying C++ implementation does not
+  tolerate duplicate keys (could enter an infinite loop if you're unlucky,
+  or raise SIGABORT if you're lucky), an intermediate Lua table is built to
+  merge any duplicate keys.
 
-* lambda:integer: number of keys per bucket when generating the g() function mapping.
+* lambda: number of keys per bucket when generating the g() function mapping.
 
-* alpha:integer: output hash space loading factor in percentages from 1..100. 100%
-  generates a *minimal* perfect hash function. But note that that the
-  implementation does implement the necessary optimizations to ensure timely
-  generation of a minimal perfect hash function. Normally you want a loading
-  factor of 80% or 90%.
+* alpha: output hash space loading factor as percentage from
+  1..100. 100% generates a *minimal* perfect hash function. But note that
+  the implementation does *not* implement the necessary optimizations to
+  ensure timely generation of minimal perfect hash functions. Normally you
+  want a loading factor of 80% to 90% for large key sets.
 
-* seed:integer: random integer seed.
+* seed: random integer seed.
 
-* nodiv:boolean: round r and m to powers of 2 and do modular reduction using bitwise
-  AND. Note that the rounding occurs after calculation of the intermediate
-  and output hash table loading. (This is more important when using the C
-  interface for small hash tables. The optimization is substantial when the
-  compiler can inline the code, but isn't substantial from Lua.)
+* nodiv: if true rounds r and m to powers of 2, and performs modular
+  reduction using bitwise AND. Note that the rounding occurs after
+  calculation of the intermediate and output hash table loading.
+
+  This is more important when building small hash tables with the C
+  interface. The optimization is substantial when the compiler can inline
+  the code, but isn't substantial from Lua.
 
 Returns a callable object.
 
 ### phf:hash(key)
 
-* Returns an integer hash for key in range 1..phf:m().
+* Returns an integer hash in the range 1..phf:m(). The returned integer will
+  be unique for all keys in the original set. Otherwise the result is
+  unspecified.
 
 ### Example ###
 
