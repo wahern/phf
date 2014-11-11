@@ -20,7 +20,7 @@ CXXNAME ?= $(shell env CC=$(CXX) mk/luapath ccname)
 ifeq ($(CXXNAME), sunpro)
 CXXFLAGS ?= -g
 else
-CXXFLAGS ?= -std=c++11 -g -O3 -Wall -Wextra
+CXXFLAGS ?= -std=c++11 -fno-rtti -fno-exceptions -g -O3 -Wall -Wextra
 endif
 
 ifeq ($(CXXNAME), sunpro)
@@ -151,4 +151,4 @@ clean:
 	$(RM) -fr *.dSYM/
 
 clean~:
-	find . -name *~ -exec rm {} +
+	find . -name '*~' -exec rm {} +

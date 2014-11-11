@@ -524,6 +524,311 @@ void phf_destroy(struct phf *phf) {
 } /* phf_destroy() */
 
 
+#if PHF_LUALIB
+#include <time.h> /* time(2) */
+
+#include <lua.hpp>
+
+
+#if LUA_VERSION_NUM < 502
+static int lua_absindex(lua_State *L, int idx) {
+	return (idx > 0 || idx <= LUA_REGISTRYINDEX)? idx : lua_gettop(L) + idx + 1;
+} /* lua_absindex() */
+
+#define lua_rawlen(t, index) lua_objlen(t, index)
+#endif
+
+
+struct phfctx {
+	int (*hash)(struct phf *, lua_State *, int index);
+	struct phf ctx;
+}; /* struct phfctx */
+
+
+static int phf_hash_uint32(struct phf *phf, lua_State *L, int index) {
+	uint32_t k = static_cast<uint32_t>(luaL_checkinteger(L, index));
+
+	lua_pushinteger(L, static_cast<lua_Integer>(PHF::hash(phf, k) + 1));
+
+	return 1;
+} /* phf_hash_uint32() */
+
+static int phf_hash_uint64(struct phf *phf, lua_State *L, int index) {
+	uint64_t k = static_cast<uint64_t>(luaL_checkinteger(L, index));
+
+	lua_pushinteger(L, static_cast<lua_Integer>(PHF::hash(phf, k) + 1));
+
+	return 1;
+} /* phf_hash_uint64() */
+
+static int phf_hash_string(struct phf *phf, lua_State *L, int index) {
+	phf_string_t k;
+
+	k.p = const_cast<char *>(luaL_checklstring(L, index, &k.n));
+
+	lua_pushinteger(L, static_cast<lua_Integer>(PHF::hash(phf, k) + 1));
+
+	return 1;
+} /* phf_hash_string() */
+
+static phf_seed_t phf_seed(lua_State *L) {
+	return phf_g(static_cast<uint32_t>(reinterpret_cast<intptr_t>(L)), static_cast<uint32_t>(time(NULL)));
+} /* phf_seed() */
+
+static int phf_mergekeys(lua_State *L, int from, int to) {
+	size_t i, n;
+
+	from = lua_absindex(L, from);
+	to = lua_absindex(L, to);
+
+	n = lua_rawlen(L, from);
+	n = PHF_MIN(INT_MAX - 1, n);
+
+	for (i = 1; i <= n; i++) {
+		lua_rawgeti(L, from, i);
+
+		if (lua_type(L, -1) == LUA_TNUMBER) {
+			lua_Integer k = lua_tointeger(L, -1);
+
+			lua_pop(L, 1);
+
+			lua_pushinteger(L, k);
+			lua_pushboolean(L, 1);
+			lua_settable(L, to);
+		} else {
+			lua_pop(L, 1);
+
+			break;
+		}
+	}
+
+	if (i <= n) {
+		for (i = 1; i <= n; i++) {
+			lua_rawgeti(L, from, i);
+			lua_tostring(L, -1);
+			lua_pushboolean(L, 1);
+			lua_settable(L, to);
+		}
+
+		return LUA_TSTRING;
+	} else {
+		return LUA_TNUMBER;
+	}
+} /* phf_mergekeys() */
+
+template<typename T>
+static phf_error_t phf_reallocarray(T **p, size_t count) {
+	T *tmp;
+
+	if (SIZE_MAX / sizeof **p < count)
+		return ENOMEM;
+
+	if (!(tmp = static_cast<T*>(realloc(*p, count * sizeof **p))))
+		return errno;
+
+	*p = tmp;
+
+	return 0;
+} /* phf_reallocarray() */
+
+static bool phf_tokey(lua_State *L, int index, phf_string_t *k) {
+	/* integer keys may exist in our merged table */
+	if (lua_type(L, index) == LUA_TSTRING) {
+		k->p = const_cast<char *>(lua_tolstring(L, index, &k->n));
+
+		return 1;
+	} else {
+		return 0;
+	}
+} /* phf_tokey() */
+
+static bool phf_tokey(lua_State *L, int index, uint64_t *k) {
+	/* we should never encounter a string in our merged table */
+	*k = static_cast<uint64_t>(lua_tointeger(L, index));
+
+	return 1;
+} /* phf_tokey() */
+
+template<typename T>
+static int phf_addkey(lua_State *L, int index, T **keys, size_t *n, size_t *z) {
+	T k;
+	int error;
+
+	if (phf_tokey(L, index, &k)) {
+		if (!(*n < *z)) {
+			size_t count = PHF_MAX(*z, 512) * 2;
+
+			if ((error = phf_reallocarray(keys, count)))
+				return error;
+
+			*z = count;
+		}
+
+		(*keys)[(*n)++] = k;
+	}
+
+	return 0;
+} /* phf_addkey() */
+
+template<typename T>
+static phf_error_t phf_addkeys(lua_State *L, int index, T **keys, size_t *n, size_t *z) {
+	int error;
+
+	index = lua_absindex(L, index);
+
+	lua_pushnil(L);
+
+	while (lua_next(L, index)) {
+		if ((error = phf_addkey<T>(L, -2, keys, n, z))) {
+			lua_pop(L, 2);
+
+			return error;
+		}
+
+		lua_pop(L, 1);
+	}
+
+	return 0;
+} /* phf_addkeys() */
+
+static int phf_new(lua_State *L) {
+	size_t l = static_cast<size_t>(luaL_optinteger(L, 2, 4));
+	size_t a = static_cast<size_t>(luaL_optinteger(L, 3, 80));
+	phf_seed_t seed = (lua_isnoneornil(L, 4))? phf_seed(L) : static_cast<phf_seed_t>(luaL_checkinteger(L, 4));
+	bool nodiv = static_cast<bool>(lua_toboolean(L, 5));
+	void *keys = NULL;
+	size_t n = 0, z = 0;
+	struct phfctx *phf;
+	int type, error;
+
+	lua_settop(L, 5);
+	luaL_checktype(L, 1, LUA_TTABLE);
+	lua_newtable(L); /* merged key table */
+
+	type = phf_mergekeys(L, 1, 6);
+
+	phf = static_cast<struct phfctx *>(lua_newuserdata(L, sizeof *phf));
+	memset(phf, 0, sizeof *phf);
+
+	luaL_getmetatable(L, "PHF*");
+	lua_setmetatable(L, -2);
+
+	if (type == LUA_TNUMBER) {
+		if ((error = phf_addkeys(L, 6, reinterpret_cast<uint64_t **>(&keys), &n, &z)))
+			goto error;
+
+		if (n == 0)
+			goto empty;
+
+		if ((error = phf_init_uint64(&phf->ctx, reinterpret_cast<uint64_t *>(keys), n, l, a, seed, nodiv)))
+			goto error;
+
+		phf->hash = &phf_hash_uint64;
+	} else {
+		if ((error = phf_addkeys(L, 6, reinterpret_cast<phf_string_t **>(&keys), &n, &z)))
+			goto error;
+
+		if (n == 0)
+			goto empty;
+
+		if ((error = phf_init_string(&phf->ctx, reinterpret_cast<phf_string_t *>(keys), n, l, a, seed, nodiv)))
+			goto error;
+
+		phf->hash = &phf_hash_string;
+	}
+
+	free(keys);
+
+	return 1;
+empty:
+	free(keys);
+
+	lua_pushstring(L, "empty key set");
+
+	return lua_error(L);
+error:
+	free(keys);
+
+	lua_pushstring(L, strerror(error));
+
+	return lua_error(L);
+} /* phf_new() */
+
+static int phf_r(lua_State *L) {
+	struct phfctx *phf = static_cast<struct phfctx *>(luaL_checkudata(L, 1, "PHF*"));
+
+	lua_pushinteger(L, static_cast<lua_Integer>(phf->ctx.r));
+
+	return 1;
+} /* phf_r() */
+
+static int phf_m(lua_State *L) {
+	struct phfctx *phf = static_cast<struct phfctx *>(luaL_checkudata(L, 1, "PHF*"));
+
+	lua_pushinteger(L, static_cast<lua_Integer>(phf->ctx.m));
+
+	return 1;
+} /* phf_m() */
+
+static int (phf_hash)(lua_State *L) {
+	struct phfctx *phf = static_cast<struct phfctx *>(luaL_checkudata(L, 1, "PHF*"));
+
+	return phf->hash(&phf->ctx, L, 2);
+} /* phf_hash() */
+
+static int phf__gc(lua_State *L) {
+	struct phfctx *phf = (struct phfctx *)luaL_checkudata(L, 1, "PHF*");
+
+	phf_destroy(&phf->ctx);
+
+	return 0;
+} /* phf__gc() */
+
+static const luaL_Reg phf_methods[] = {
+	{ "hash", &(phf_hash) },
+	{ "r",    &phf_r },
+	{ "m",    &phf_m },
+	{ NULL,   NULL },
+}; /* phf_methods[] */
+
+static const luaL_Reg phf_metatable[] = {
+	{ "__call", &phf_hash },
+	{ "__gc",   &phf__gc },
+	{ NULL,     NULL },
+}; /* phf_metatable[] */
+
+static const luaL_Reg phf_globals[] = {
+	{ "new", &phf_new },
+	{ NULL,  NULL },
+}; /* phf_globals[] */
+
+static void phf_register(lua_State *L, const luaL_Reg *l) {
+#if LUA_VERSION_NUM >= 502
+	luaL_setfuncs(L, l, 0);
+#else
+	luaL_register(L, NULL, l);
+#endif
+} /* phf_register() */
+
+extern "C" int luaopen_phf(lua_State *L) {
+	if (luaL_newmetatable(L, "PHF*")) {
+		phf_register(L, phf_metatable);
+		lua_newtable(L);
+		phf_register(L, phf_methods);
+		lua_setfield(L, -2, "__index");
+	}
+
+	lua_pop(L, 1);
+
+	lua_newtable(L);
+	phf_register(L, phf_globals);
+
+	return 1;
+} /* luaopen_phf() */
+
+#endif /* PHF_LUALIB */
+
+
 #if PHF_MAIN
 
 #include <stdlib.h>    /* arc4random(3) free(3) realloc(3) */
