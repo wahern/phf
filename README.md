@@ -36,6 +36,8 @@ Note that the modules for Lua 5.1, 5.2, and 5.3 can be built simultaneously.
 * SOFLAGS: Flags needed to build dynamic library.
 * LOFLAGS: Flags needed to build loadable module. Normally should be the
   same as SOFLAGS, except on OS X.
+* LIBS: Library dependencies. Normally empty, but see the section Avoiding
+  C++ Dependencies.
 
 #### Avoiding C++ Dependencies
 
