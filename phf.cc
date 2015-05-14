@@ -30,7 +30,9 @@
 #include <string.h>   /* memset(3) */
 #include <errno.h>    /* errno */
 #include <assert.h>   /* assert(3) */
+#if !PHF_NO_LIBCXX
 #include <string>     /* std::string */
+#endif
 
 #include "phf.h"
 
@@ -180,9 +182,11 @@ static inline uint32_t phf_round32(phf_string_t k, uint32_t h1) {
 	return phf_round32(reinterpret_cast<const unsigned char *>(k.p), k.n, h1);
 } /* phf_round32() */
 
+#if !PHF_NO_LIBCXX
 static inline uint32_t phf_round32(std::string k, uint32_t h1) {
 	return phf_round32(reinterpret_cast<const unsigned char *>(k.c_str()), k.length(), h1);
 } /* phf_round32() */
+#endif
 
 static inline uint32_t phf_mix32(uint32_t h1) {
 	h1 ^= h1 >> 16;
@@ -324,7 +328,7 @@ static int phf_keycmp(const phf_key<T> *a, const phf_key<T> *b) {
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 template<typename key_t, bool nodiv>
-int PHF::init(struct phf *phf, const key_t k[], const size_t n, const size_t l, const size_t a, const phf_seed_t seed) {
+PHF_PUBLIC int PHF::init(struct phf *phf, const key_t k[], const size_t n, const size_t l, const size_t a, const phf_seed_t seed) {
 	size_t n1 = PHF_MAX(n, 1); /* for computations that require n > 0 */
 	size_t l1 = PHF_MAX(l, 1);
 	size_t a1 = PHF_MAX(PHF_MIN(a, 100), 1);
@@ -455,15 +459,19 @@ clean:
 template int PHF::init<uint32_t, true>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const phf_seed_t);
 template int PHF::init<uint64_t, true>(struct phf *, const uint64_t[], const size_t, const size_t, const size_t, const phf_seed_t);
 template int PHF::init<phf_string_t, true>(struct phf *, const phf_string_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+#if !PHF_NO_LIBCXX
 template int PHF::init<std::string, true>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const phf_seed_t);
+#endif
 
 template int PHF::init<uint32_t, false>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const phf_seed_t);
 template int PHF::init<uint64_t, false>(struct phf *, const uint64_t[], const size_t, const size_t, const size_t, const phf_seed_t);
 template int PHF::init<phf_string_t, false>(struct phf *, const phf_string_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+#if !PHF_NO_LIBCXX
 template int PHF::init<std::string, false>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const phf_seed_t);
+#endif
 
 template<typename T>
-phf_hash_t PHF::hash(struct phf *phf, T k) {
+PHF_PUBLIC phf_hash_t PHF::hash(struct phf *phf, T k) {
 	if (phf->nodiv) {
 		uint32_t d = phf->g[phf_g(k, phf->seed) & (phf->r - 1)];
 
@@ -478,48 +486,50 @@ phf_hash_t PHF::hash(struct phf *phf, T k) {
 template phf_hash_t PHF::hash<uint32_t>(struct phf *, uint32_t);
 template phf_hash_t PHF::hash<uint64_t>(struct phf *, uint64_t);
 template phf_hash_t PHF::hash<phf_string_t>(struct phf *, phf_string_t);
+#if !PHF_NO_LIBCXX
 template phf_hash_t PHF::hash<std::string>(struct phf *, std::string);
+#endif
 
-void PHF::destroy(struct phf *phf) {
+PHF_PUBLIC void PHF::destroy(struct phf *phf) {
 	free(phf->g);
 	phf->g = NULL;
 } /* PHF::destroy() */
 
 
-int phf_init_uint32(struct phf *phf, uint32_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
+PHF_PUBLIC int phf_init_uint32(struct phf *phf, uint32_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
 	if (nodiv)
 		return PHF::init<uint32_t, true>(phf, k, n, lambda, alpha, seed);
 	else
 		return PHF::init<uint32_t, false>(phf, k, n, lambda, alpha, seed);
 } /* phf_init_uint32() */
 
-int phf_init_uint64(struct phf *phf, uint64_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
+PHF_PUBLIC int phf_init_uint64(struct phf *phf, uint64_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
 	if (nodiv)
 		return PHF::init<uint64_t, true>(phf, k, n, lambda, alpha, seed);
 	else
 		return PHF::init<uint64_t, false>(phf, k, n, lambda, alpha, seed);
 } /* phf_init_uint64() */
 
-int phf_init_string(struct phf *phf, phf_string_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
+PHF_PUBLIC int phf_init_string(struct phf *phf, phf_string_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
 	if (nodiv)
 		return PHF::init<phf_string_t, true>(phf, k, n, lambda, alpha, seed);
 	else
 		return PHF::init<phf_string_t, false>(phf, k, n, lambda, alpha, seed);
 } /* phf_init_string() */
 
-phf_hash_t phf_hash_uint32(struct phf *phf, uint32_t k) {
+PHF_PUBLIC phf_hash_t phf_hash_uint32(struct phf *phf, uint32_t k) {
 	return PHF::hash(phf, k);
 } /* phf_hash_uint32() */
 
-phf_hash_t phf_hash_uint64(struct phf *phf, uint64_t k) {
+PHF_PUBLIC phf_hash_t phf_hash_uint64(struct phf *phf, uint64_t k) {
 	return PHF::hash(phf, k);
 } /* phf_hash_uint64() */
 
-phf_hash_t phf_hash_string(struct phf *phf, phf_string_t k) {
+PHF_PUBLIC phf_hash_t phf_hash_string(struct phf *phf, phf_string_t k) {
 	return PHF::hash(phf, k);
 } /* phf_hash_string() */
 
-void phf_destroy(struct phf *phf) {
+PHF_PUBLIC void phf_destroy(struct phf *phf) {
 	PHF::destroy(phf);
 } /* phf_destroy() */
 
@@ -959,9 +969,11 @@ static inline void printkey(phf_string_t &k, phf_hash_t hash) {
 	printf("%-32.*s : %" PHF_PRIuHASH "\n", (int)k.n, (char *)k.p, hash);
 } /* printkey() */
 
+#if !PHF_NO_LIBCXX
 static inline void printkey(std::string &k, phf_hash_t hash) {
 	printf("%-32s : %" PHF_PRIuHASH "\n", k.c_str(), hash);
 } /* printkey() */
+#endif
 
 template<typename T>
 static inline void printkey(T k, phf_hash_t hash) {

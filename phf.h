@@ -41,8 +41,10 @@
 
 #ifdef __clang__
 #define phf_has_extension(x) __has_extension(x)
+#define phf_has_attribute(x) __has_attribute(x)
 #else
 #define phf_has_extension(x) 0
+#define phf_has_attribute(x) 0
 #endif
 
 #ifndef PHF_HAVE_NOEXCEPT
@@ -67,6 +69,11 @@
 #define PHF_HAVE_BUILTIN_CHOOSE_EXPR (defined __GNUC__)
 #endif
 
+#ifndef PHF_HAVE_ATTRIBUTE_VISIBILITY
+#define PHF_HAVE_ATTRIBUTE_VISIBILITY \
+	(phf_has_attribute(visibility) || PHF_GNUC_PREREQ(4, 0))
+#endif
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #if __cplusplus < 201103L
@@ -78,6 +85,24 @@
 #if __cplusplus < 201103L
 #pragma GCC diagnostic ignored "-Wpedantic"
 #pragma GCC diagnostic ignored "-Wvariadic-macros"
+#endif
+#endif
+
+
+/*
+ * C / C + +  V I S I B I L I T Y
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#ifndef PHF_PUBLIC
+#define PHF_PUBLIC
+#endif
+
+#ifndef PHF_LOCAL
+#if PHF_HAVE_ATTRIBUTE_VISIBILITY
+#define PHF_LOCAL __attribute__((visibility("hidden")))
+#else
+#define PHF_LOCAL
 #endif
 #endif
 
@@ -120,32 +145,40 @@ struct phf {
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #ifdef __cplusplus
 
+#if !PHF_NO_LIBCXX
 #include <string> /* std::string */
+#endif
 
 namespace PHF {
 	template<typename key_t, bool nodiv>
-	phf_error_t init(struct phf *, const key_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+	PHF_PUBLIC phf_error_t init(struct phf *, const key_t[], const size_t, const size_t, const size_t, const phf_seed_t);
 
 	template<typename key_t>
-	phf_hash_t hash(struct phf *, key_t);
+	PHF_PUBLIC phf_hash_t hash(struct phf *, key_t);
 
-	void destroy(struct phf *);
+	static void destroy(struct phf *);
 }
 
 extern template phf_error_t PHF::init<uint32_t, true>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const phf_seed_t);
 extern template phf_error_t PHF::init<uint64_t, true>(struct phf *, const uint64_t[], const size_t, const size_t, const size_t, const phf_seed_t);
 extern template phf_error_t PHF::init<phf_string_t, true>(struct phf *, const phf_string_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+#if !PHF_NO_LIBCXX
 extern template phf_error_t PHF::init<std::string, true>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const phf_seed_t);
+#endif
 
 extern template phf_error_t PHF::init<uint32_t, false>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const phf_seed_t);
 extern template phf_error_t PHF::init<uint64_t, false>(struct phf *, const uint64_t[], const size_t, const size_t, const size_t, const phf_seed_t);
 extern template phf_error_t PHF::init<phf_string_t, false>(struct phf *, const phf_string_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+#if !PHF_NO_LIBCXX
 extern template phf_error_t PHF::init<std::string, false>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const phf_seed_t);
+#endif
 
 extern template phf_hash_t PHF::hash<uint32_t>(struct phf *, uint32_t);
 extern template phf_hash_t PHF::hash<uint64_t>(struct phf *, uint64_t);
 extern template phf_hash_t PHF::hash<phf_string_t>(struct phf *, phf_string_t);
+#if !PHF_NO_LIBCXX
 extern template phf_hash_t PHF::hash<std::string>(struct phf *, std::string);
+#endif
 
 #endif /* __cplusplus */
 
@@ -158,15 +191,15 @@ extern template phf_hash_t PHF::hash<std::string>(struct phf *, std::string);
 extern "C" {
 #endif
 
-phf_error_t phf_init_uint32(struct phf *, uint32_t *, size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
-phf_error_t phf_init_uint64(struct phf *, uint64_t *, size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
-phf_error_t phf_init_string(struct phf *, phf_string_t *, size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
+PHF_PUBLIC phf_error_t phf_init_uint32(struct phf *, uint32_t *, size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
+PHF_PUBLIC phf_error_t phf_init_uint64(struct phf *, uint64_t *, size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
+PHF_PUBLIC phf_error_t phf_init_string(struct phf *, phf_string_t *, size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
 
-phf_hash_t phf_hash_uint32(struct phf *, uint32_t);
-phf_hash_t phf_hash_uint64(struct phf *, uint64_t);
-phf_hash_t phf_hash_string(struct phf *, phf_string_t);
+PHF_PUBLIC phf_hash_t phf_hash_uint32(struct phf *, uint32_t);
+PHF_PUBLIC phf_hash_t phf_hash_uint64(struct phf *, uint64_t);
+PHF_PUBLIC phf_hash_t phf_hash_string(struct phf *, phf_string_t);
 
-void phf_destroy(struct phf *);
+PHF_PUBLIC void phf_destroy(struct phf *);
 
 #ifdef __cplusplus
 }
