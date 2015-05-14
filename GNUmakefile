@@ -1,3 +1,5 @@
+all: # default target
+
 -include .config
 
 prefix ?= /usr/local
@@ -80,6 +82,8 @@ phf: phf.cc phf.h
 $(LIBPHF): phf.cc phf.h
 	$(CXX) -o $@ $< $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) $(SOFLAGS)
 
+all: phf $(LIBPHF)
+
 LUAPATH = $(shell env CC="$(CXX)" CPPFLAGS="$(CPPFLAGS)" LDFLAGS="$(LDFLAGS)" mk/luapath -krxm3 $(if $(includedir),$(if $(DESTDIR), -I$(DESTDIR)$(includedir)) -I$(includedir)) -I/usr/include -I/usr/local/include $(if $(DESTDIR),-P$(DESTDIR)$(bindir)) -P$(bindir) -v$(1) $(2))
 
 define LUALIB_BUILD
@@ -91,6 +95,12 @@ $(1)/phf.so: phf.cc phf.h
 .SECONDARY: all$(1)
 
 lua$(1) all$(1): $(1)/phf.so
+
+ifeq (all, $(filter all, $(or $(MAKECMDGOALS), all)))
+ifeq ($(1), $$(call LUAPATH, $(1), version))
+all: $(1)/phf.so
+endif
+endif
 
 endef # LUALIB_BUILD
 
@@ -136,9 +146,6 @@ $(eval $(call LUALIB_INSTALL,5.2,lua52cpath))
 $(eval $(call LUALIB_INSTALL,5.3,lua53cpath))
 
 
-#
-# 
-#
 .PHONY: clean distclean clean~
 
 distclean: clean
