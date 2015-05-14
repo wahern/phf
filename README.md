@@ -1,7 +1,15 @@
 # Introduction #
 
-This is a simple implementation of the CHD perfect hash algorithm. For
-more information about the algorithm, see http://cmph.sourceforge.net/chd.html.
+This is a simple implementation of the CHD perfect hash algorithm. CHD can
+generate perfect hash functions for very large key sets--on the order of
+millions of keys--in a very short time. On my circa 2012 desktop and using
+the default parameters (hash load factor of 80% and average displacement map
+bucket load of 4.0 keys) this implementation can generate a hash function
+for 1,000 keys in less than 1/100th of a second, and 1,000,000 keys in less
+than a second.
+
+For more information about the algorithm, see
+http://cmph.sourceforge.net/chd.html.
 
 # Dependencies #
 
@@ -28,6 +36,21 @@ Note that the modules for Lua 5.1, 5.2, and 5.3 can be built simultaneously.
 * SOFLAGS: Flags needed to build dynamic library.
 * LOFLAGS: Flags needed to build loadable module. Normally should be the
   same as SOFLAGS, except on OS X.
+
+#### Avoiding C++ Dependencies
+
+Defining the preprocessor macro PHF_NO_LIBCXX to 1 will prevent usage of C++
+interfaces such as std::string that would require a dependency on libc++ or
+libstdc++. This allows using platform-dependent flags in CXXFLAGS, LDFLAGS,
+and SOFLAGS to prevent a dependency on the system C++ library.
+
+For example, on OS X you can do:
+```sh
+$ make CPPFLAGS="-DPHF_NO_LIBCXX" \
+CXXFLAGS="-std=c++11 -fno-rtti -fno-exceptions -O3 -march=native" \
+LDFLAGS="-nostdlib" \
+LIBS="-lSystem"
+```
 
 ### Installation ####
 * prefix

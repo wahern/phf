@@ -68,6 +68,7 @@ config:
 	printf 'LDFLAGS ?= $(value LDFLAGS)'"\n" >> .config
 	printf 'SOFLAGS ?= $(value SOFLAGS)'"\n" >> .config
 	printf 'LOFLAGS ?= $(value LOFLAGS)'"\n" >> .config
+	printf 'LIBS ?= $(value LIBS)'"\n" >> .config
 	printf 'LIBPHF ?= $(value LIBPHF)'"\n" >> .config
 	printf 'RM ?= $(value RM)'"\n" >> .config
 	printf 'RMDIR ?= $(value RMDIR)'"\n" >> .config
@@ -77,10 +78,10 @@ config:
 	printf 'CXXNAME ?= $(value CXXNAME)'"\n" >> .config
 
 phf: phf.cc phf.h
-	$(CXX) -o $@ $< $(CXXFLAGS) $(CPPFLAGS) -DPHF_MAIN
+	$(CXX) -o $@ $< $(CXXFLAGS) $(CPPFLAGS) -DPHF_MAIN $(LIBS)
 
 $(LIBPHF): phf.cc phf.h
-	$(CXX) -o $@ $< $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) $(SOFLAGS)
+	$(CXX) -o $@ $< $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) $(SOFLAGS) $(LIBS)
 
 all: phf $(LIBPHF)
 
@@ -90,7 +91,7 @@ define LUALIB_BUILD
 $(1)/phf.so: phf.cc phf.h
 	test "$(1)" = "$$(call LUAPATH, $(1), version)"
 	$$(MKDIR) -p $$(@D)
-	$$(CXX) -o $$@ $$< $$(CXXFLAGS) $$(CPPFLAGS) $$(call LUAPATH, $(1), cppflags) -DPHF_LUALIB $$(LDFLAGS) $$(LOFLAGS)
+	$$(CXX) -o $$@ $$< $$(CXXFLAGS) $$(CPPFLAGS) $$(call LUAPATH, $(1), cppflags) -DPHF_LUALIB $$(LDFLAGS) $$(LOFLAGS) $(LIBS)
 
 .SECONDARY: all$(1)
 
