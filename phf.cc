@@ -63,6 +63,7 @@
 #define PHF_MIN(a, b) (((a) < (b))? (a) : (b))
 #define PHF_MAX(a, b) (((a) > (b))? (a) : (b))
 #define PHF_ROTL(x, y) (((x) << (y)) | ((x) >> (PHF_BITS(x) - (y))))
+#define PHF_COUNTOF(a) (sizeof (a) / sizeof *(a))
 
 
 /*
@@ -94,6 +95,105 @@ static inline size_t phf_powerup(size_t i) {
 #error No SIZE_MAX defined
 #endif
 } /* phf_powerup() */
+
+static inline uint64_t phf_a_s_mod_n(uint64_t a, uint64_t s, uint64_t n) {
+	uint64_t v;
+
+	assert(n <= UINT32_MAX);
+
+	v = 1;
+	a %= n;
+
+	while (s > 0) {
+		if (s % 2 == 1)
+			v = (v * a) % n;
+		a = (a * a) % n;
+		s /= 2;
+	}
+
+	return v;
+} /* phf_a_s_mod_n() */
+
+/*
+ * Rabin-Miller primality test adapted from Niels Ferguson and Bruce
+ * Schneier, "Practical Cryptography" (Wiley, 2003), 201-204.
+ */
+static inline bool phf_witness(uint64_t n, uint64_t a, uint64_t s, uint64_t t) {
+	uint64_t v, i;
+
+	assert(a > 0 && a < n);
+	assert(n <= UINT32_MAX);
+
+	if (1 == (v = phf_a_s_mod_n(a, s, n)))
+		return 1;
+
+	for (i = 0; v != n - 1; i++) {
+		if (i == t - 1)
+			return 0;
+		v = (v * v) % n;
+	}
+
+	return 1;
+} /* phf_witness() */
+
+static inline bool phf_rabinmiller(uint64_t n) {
+	/*
+	 * Witness 2 is deterministic for all n < 2047. Witnesses 2, 7, 61
+	 * are deterministic for all n < 4,759,123,141.
+	 */
+	static const int witness[] = { 2, 7, 61 };
+	uint64_t s, t, k, i;
+
+	assert(n <= UINT32_MAX);
+
+	if (n < 3 || n % 2 == 0)
+		return 0;
+
+	/* derive 2^t * s = n - 1 where s is odd */
+	s = n - 1;
+	t = 0;
+	while (s % 2 == 0) {
+		s /= 2;
+		t++;
+	}
+
+	/* NB: witness a must be 1 <= a < n */
+	if (n < 2027)
+		return phf_witness(n, 2, s, t);
+
+	for (i = 0; i < PHF_COUNTOF(witness); i++) {
+		if (!phf_witness(n, witness[i], s, t))
+			return 0;
+	}
+
+	return 1;
+} /* phf_rabinmiller() */
+
+static inline bool phf_isprime(size_t n) {
+	static const char map[] = { 0, 1, 2, 3, 0, 5, 0, 7 };
+	size_t i;
+
+	if (n < PHF_COUNTOF(map))
+		return map[n];
+
+	for (i = 2; i < PHF_COUNTOF(map); i++) {
+		if (map[i] && (n % map[i] == 0))
+			return 0;
+	}
+
+	return phf_rabinmiller(n);
+} /* phf_isprime() */
+
+static inline size_t phf_primeup(size_t n) {
+	/* NB: 4294967291 is largest 32-bit prime */
+	if (n > 4294967291)
+		return 0;
+
+	while (n < SIZE_MAX && !phf_isprime(n))
+		n++;
+
+	return n;
+} /* phf_primeup() */
 
 
 /*
@@ -349,10 +449,13 @@ PHF_PUBLIC int PHF::init(struct phf *phf, const key_t k[], const size_t n, const
 		r = phf_powerup(n1 / PHF_MIN(l1, n1));
 		m = phf_powerup((n1 * 100) / a1);
 	} else {
-		/* XXX: should we bother rounding to prime number? */
-		r = PHF_HOWMANY(n1, l1);
-		m = (n1 * 100) / a1;
+		r = phf_primeup(PHF_HOWMANY(n1, l1));
+		/* XXX: should we bother rounding m to prime number for small n? */
+		m = phf_primeup((n1 * 100) / a1);
 	}
+
+	if (r == 0 || m == 0)
+		return ERANGE;
 
 	if (!(B_k = static_cast<phf_key<key_t> *>(calloc(n1, sizeof *B_k))))
 		goto syerr;
@@ -1028,6 +1131,28 @@ static inline void exec(int argc, char **argv, size_t lambda, size_t alpha, size
 	free(k);
 } /* exec() */
 
+static void printprimes(int argc, char **argv) {
+	intmax_t n = 0, m = UINT32_MAX;
+	char *end;
+
+	if (argc > 0) {
+		n = strtoimax(argv[0], &end, 0);
+		if (end == argv[0] || *end != '\0' || n < 0 || n > UINT32_MAX)
+			errx(1, "%s: invalid number", argv[0]);
+		n = PHF_MAX(n, 2);
+	}
+
+	if (argc > 1) {
+		m = strtoimax(argv[1], &end, 0);
+		if (end == argv[1] || *end != '\0' || m < n || m > UINT32_MAX)
+			errx(1, "%s: invalid number", argv[1]);
+	}
+
+	for (; n <= m; n++) {
+		if (phf_isprime(n))
+			printf("%" PRIdMAX "\n", n);
+	}
+} /* printprimes() */
 
 int main(int argc, char **argv) {
 	const char *path = "/dev/null";
@@ -1042,11 +1167,12 @@ int main(int argc, char **argv) {
 		PHF_UINT64,
 		PHF_STRING
 	} type = PHF_UINT32;
+	bool primes = 0;
 	extern char *optarg;
 	extern int optind;
 	int optc;
 
-	while (-1 != (optc = getopt(argc, argv, "f:l:a:s:2t:nvh"))) {
+	while (-1 != (optc = getopt(argc, argv, "f:l:a:s:2t:nvph"))) {
 		switch (optc) {
 		case 'f':
 			path = optarg;
@@ -1081,11 +1207,14 @@ int main(int argc, char **argv) {
 		case 'v':
 			verbose = 1;
 			break;
+		case 'p':
+			primes = 1;
+			break;
 		case 'h':
 			/* FALL THROUGH */
 		default:
 			fprintf(optc == 'h'? stdout : stderr,
-				"%s [-f:l:a:s:t:2nvh] [key [...]]\n"
+				"%s [-f:l:a:s:t:2nvph] [key [...]]\n"
 				"  -f PATH  read keys from PATH (- for stdin)\n"
 				"  -l NUM   number of keys per displacement map bucket (reported as g_load)\n"
 				"  -a PCT   hash table load factor (1%% - 100%%)\n"
@@ -1094,6 +1223,7 @@ int main(int argc, char **argv) {
 				"  -2       avoid modular division by rounding r and m to power of 2\n"
 				"  -n       do not print key-hash pairs\n"
 				"  -v       report hashing status\n"
+				"  -p       operate like primes(3) utility\n"
 				"  -h       print usage message\n"
 				"\n"
 				"Report bugs to <william@25thandClement.com>\n",
@@ -1106,6 +1236,9 @@ int main(int argc, char **argv) {
 
 	argc -= optind;
 	argv += optind;
+
+	if (primes)
+		return printprimes(argc, argv), 0;
 
 	if (strcmp(path, "-") && !freopen(path, "r", stdin))
 		err(1, "%s", path);
