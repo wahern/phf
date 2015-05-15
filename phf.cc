@@ -142,7 +142,7 @@ static inline bool phf_rabinmiller(uint64_t n) {
 	 * are deterministic for all n < 4,759,123,141.
 	 */
 	static const int witness[] = { 2, 7, 61 };
-	uint64_t s, t, k, i;
+	uint64_t s, t, i;
 
 	assert(n <= UINT32_MAX);
 
