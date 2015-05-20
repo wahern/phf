@@ -136,6 +136,12 @@ struct phf {
 	uint32_t *g; /* displacement map indexed by g(k) % r */
 
 	size_t d_max; /* maximum displacement value in g */
+
+	enum {
+		PHF_G_UINT8 = 1,
+		PHF_G_UINT16,
+		PHF_G_UINT32,
+	} g_type;
 }; /* struct phf */
 
 
@@ -156,7 +162,9 @@ namespace PHF {
 	template<typename key_t>
 	PHF_PUBLIC phf_hash_t hash(struct phf *, key_t);
 
-	static void destroy(struct phf *);
+	PHF_PUBLIC void destroy(struct phf *);
+
+	static void compact(struct phf *);
 }
 
 extern template phf_error_t PHF::init<uint32_t, true>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const phf_seed_t);

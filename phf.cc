@@ -538,6 +538,7 @@ retry:
 	g = NULL;
 
 	phf->d_max = d_max;
+	phf->g_type = phf::PHF_G_UINT32;
 
 	error = 0;
 
@@ -552,6 +553,44 @@ clean:
 
 	return error;
 } /* PHF::init() */
+
+
+/*
+ * D I S P L A C E M E N T  M A P  C O M P A C T I O N
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+template<typename dst_t, typename src_t>
+static inline void phf_memmove(dst_t *dst, src_t *src, size_t n) {
+	for (size_t i = 0; i < n; i++) {
+		dst_t tmp = src[i];
+		dst[i] = tmp;
+	}
+} /* phf_memmove() */
+
+static void PHF::compact(struct phf *phf) {
+	size_t size = 0;
+	void *tmp;
+
+	if (phf->g_type != phf::PHF_G_UINT32)
+		return; /* already compacted */
+
+	if (phf->d_max <= 255) {
+		phf_memmove(reinterpret_cast<uint8_t *>(phf->g), reinterpret_cast<uint32_t *>(phf->g), phf->r);
+		phf->g_type = phf::PHF_G_UINT8;
+		size = sizeof (uint8_t);
+	} else if (phf->d_max <= 65535) {
+		phf_memmove(reinterpret_cast<uint16_t *>(phf->g), reinterpret_cast<uint32_t *>(phf->g), phf->r);
+		phf->g_type = phf::PHF_G_UINT16;
+		size = sizeof (uint16_t);
+	} else {
+		return; /* nothing to compact */
+	}
+
+	/* simply keep old array if realloc fails */
+	if ((tmp = realloc(phf->g, phf->r * size)))
+		phf->g = static_cast<uint32_t *>(tmp);
+} /* PHF::compact() */
 
 
 /*
@@ -573,16 +612,34 @@ template int PHF::init<phf_string_t, false>(struct phf *, const phf_string_t[], 
 template int PHF::init<std::string, false>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const phf_seed_t);
 #endif
 
+#define phf_hash_(nodiv, ...) \
+	((nodiv)? phf_hash_<true>(__VA_ARGS__) : phf_hash_<false>(__VA_ARGS__))
+
+template<bool nodiv, typename map_t, typename key_t>
+static inline phf_hash_t (phf_hash_)(map_t *g, key_t k, uint32_t seed, size_t r, size_t m) {
+	if (nodiv) {
+		uint32_t d = g[phf_g(k, seed) & (r - 1)];
+
+		return phf_f(d, k, seed) & (m - 1);
+	} else {
+		uint32_t d = g[phf_g(k, seed) % r];
+
+		return phf_f(d, k, seed) % m;
+	}
+} /* phf_hash_() */
+
 template<typename T>
 PHF_PUBLIC phf_hash_t PHF::hash(struct phf *phf, T k) {
-	if (phf->nodiv) {
-		uint32_t d = phf->g[phf_g(k, phf->seed) & (phf->r - 1)];
-
-		return phf_f(d, k, phf->seed) & (phf->m - 1);
-	} else {
-		uint32_t d = phf->g[phf_g(k, phf->seed) % phf->r];
-
-		return phf_f(d, k, phf->seed) % phf->m;
+	switch (phf->g_type) {
+	case phf::PHF_G_UINT8:
+		return phf_hash_(phf->nodiv, reinterpret_cast<uint8_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	case phf::PHF_G_UINT16:
+		return phf_hash_(phf->nodiv, reinterpret_cast<uint16_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	case phf::PHF_G_UINT32:
+		return phf_hash_(phf->nodiv, reinterpret_cast<uint32_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	default:
+		abort();
+		return 0;
 	}
 } /* PHF::hash() */
 
@@ -1100,6 +1157,8 @@ static inline void exec(int argc, char **argv, size_t lambda, size_t alpha, size
 	begin = clock();
 	PHF::init<T, nodiv>(&phf, k, n, lambda, alpha, seed);
 	end = clock();
+
+	PHF::compact(&phf);
 
 	if (verbose) {
 		warnx("found perfect hash for %zu keys in %fs", n, (double)(end - begin) / CLOCKS_PER_SEC);
