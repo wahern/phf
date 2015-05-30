@@ -283,15 +283,15 @@ template size_t PHF::uniq<std::string>(std::string[], const size_t);
 
 PHF_PUBLIC size_t phf_uniq_uint32(uint32_t k[], const size_t n) {
 	return PHF::uniq(k, n);
-} /* phf_hash_uint32() */
+} /* phf_uniq_uint32() */
 
 PHF_PUBLIC size_t phf_uniq_uint64(uint64_t k[], const size_t n) {
 	return PHF::uniq(k, n);
-} /* phf_hash_uint64() */
+} /* phf_uniq_uint64() */
 
 PHF_PUBLIC size_t phf_uniq_string(phf_string_t k[], const size_t n) {
 	return PHF::uniq(k, n);
-} /* phf_hash_string() */
+} /* phf_uniq_string() */
 
 
 /*
@@ -852,47 +852,6 @@ static phf_seed_t phf_seed(lua_State *L) {
 	return phf_g(static_cast<uint32_t>(reinterpret_cast<intptr_t>(L)), static_cast<uint32_t>(time(NULL)));
 } /* phf_seed() */
 
-static int phf_mergekeys(lua_State *L, int from, int to) {
-	size_t i, n;
-
-	from = lua_absindex(L, from);
-	to = lua_absindex(L, to);
-
-	n = lua_rawlen(L, from);
-	n = PHF_MIN(INT_MAX - 1, n);
-
-	for (i = 1; i <= n; i++) {
-		lua_rawgeti(L, from, i);
-
-		if (lua_type(L, -1) == LUA_TNUMBER) {
-			lua_Integer k = lua_tointeger(L, -1);
-
-			lua_pop(L, 1);
-
-			lua_pushinteger(L, k);
-			lua_pushboolean(L, 1);
-			lua_settable(L, to);
-		} else {
-			lua_pop(L, 1);
-
-			break;
-		}
-	}
-
-	if (i <= n) {
-		for (i = 1; i <= n; i++) {
-			lua_rawgeti(L, from, i);
-			lua_tostring(L, -1);
-			lua_pushboolean(L, 1);
-			lua_settable(L, to);
-		}
-
-		return LUA_TSTRING;
-	} else {
-		return LUA_TNUMBER;
-	}
-} /* phf_mergekeys() */
-
 template<typename T>
 static phf_error_t phf_reallocarray(T **p, size_t count) {
 	T *tmp;
@@ -908,62 +867,82 @@ static phf_error_t phf_reallocarray(T **p, size_t count) {
 	return 0;
 } /* phf_reallocarray() */
 
-static bool phf_tokey(lua_State *L, int index, phf_string_t *k) {
-	/* integer keys may exist in our merged table */
-	if (lua_type(L, index) == LUA_TSTRING) {
-		k->p = const_cast<char *>(lua_tolstring(L, index, &k->n));
+static phf_error_t phf_tokey(lua_State *L, int index, uint32_t *k) {
+	if (LUA_TNUMBER != lua_type(L, index))
+		return EINVAL;
 
-		return 1;
-	} else {
-		return 0;
-	}
-} /* phf_tokey() */
+#if LUA_VERSION_NUM > 502
+	lua_Integer v;
 
-static bool phf_tokey(lua_State *L, int index, uint64_t *k) {
-	/* we should never encounter a string in our merged table */
-	*k = static_cast<uint64_t>(lua_tointeger(L, index));
+	v = static_cast<lua_Integer>(lua_tointeger(L, index));
 
-	return 1;
-} /* phf_tokey() */
+	if (v > UINT32_MAX)
+		return ERANGE;
+#else
+	lua_Number v;
 
-template<typename T>
-static int phf_addkey(lua_State *L, int index, T **keys, size_t *n, size_t *z) {
-	T k;
-	int error;
+	v = static_cast<lua_Number>(lua_tonumber(L, index));
 
-	if (phf_tokey(L, index, &k)) {
-		if (!(*n < *z)) {
-			size_t count = PHF_MAX(*z, 512) * 2;
-
-			if ((error = phf_reallocarray(keys, count)))
-				return error;
-
-			*z = count;
-		}
-
-		(*keys)[(*n)++] = k;
-	}
+	if (v > UINT32_MAX)
+		return ERANGE;
+#endif
+	*k = static_cast<uint32_t>(v);
 
 	return 0;
-} /* phf_addkey() */
+} /* phf_tokey() */
+
+static phf_error_t phf_tokey(lua_State *L, int index, uint64_t *k) {
+	if (LUA_TNUMBER != lua_type(L, index))
+		return EINVAL;
+
+#if LUA_VERSION_NUM > 502
+	lua_Integer v;
+
+	v = static_cast<lua_Integer>(lua_tointeger(L, index));
+#else
+	lua_Number v;
+
+	v = static_cast<lua_Number>(lua_tonumber(L, index));
+#endif
+	*k = static_cast<uint64_t>(v);
+
+	return 0;
+} /* phf_tokey() */
+
+static phf_error_t phf_tokey(lua_State *L, int index, phf_string_t *k) {
+	if (LUA_TSTRING != lua_type(L, index))
+		return EINVAL;
+
+	k->p = const_cast<char *>(lua_tolstring(L, index, &k->n));
+
+	return 0;
+} /* phf_tokey() */
 
 template<typename T>
-static phf_error_t phf_addkeys(lua_State *L, int index, T **keys, size_t *n, size_t *z) {
-	int error;
+static phf_error_t phf_addkeys(lua_State *L, int index, T **keys, int *n) {
+	int i, error = 0;
+	T *p;
 
-	index = lua_absindex(L, index);
+	*n = lua_rawlen(L, index);
 
-	lua_pushnil(L);
+	if ((error = phf_reallocarray(keys, *n)))
+		return error;
 
-	while (lua_next(L, index)) {
-		if ((error = phf_addkey<T>(L, -2, keys, n, z))) {
-			lua_pop(L, 2);
+	p = *keys;
 
-			return error;
-		}
+	for (i = 1; i <= *n; i++) {
+		lua_rawgeti(L, index, i);
+
+		error = phf_tokey(L, -1, p++);
 
 		lua_pop(L, 1);
+
+		if (error)
+			return error;
+
 	}
+
+	*n = PHF::uniq(*keys, *n);
 
 	return 0;
 } /* phf_addkeys() */
@@ -974,15 +953,11 @@ static int phf_new(lua_State *L) {
 	phf_seed_t seed = (lua_isnoneornil(L, 4))? phf_seed(L) : static_cast<phf_seed_t>(luaL_checkinteger(L, 4));
 	bool nodiv = static_cast<bool>(lua_toboolean(L, 5));
 	void *keys = NULL;
-	size_t n = 0, z = 0;
 	struct phfctx *phf;
-	int type, error;
+	int n, error;
 
 	lua_settop(L, 5);
 	luaL_checktype(L, 1, LUA_TTABLE);
-	lua_newtable(L); /* merged key table */
-
-	type = phf_mergekeys(L, 1, 6);
 
 	phf = static_cast<struct phfctx *>(lua_newuserdata(L, sizeof *phf));
 	memset(phf, 0, sizeof *phf);
@@ -990,31 +965,62 @@ static int phf_new(lua_State *L) {
 	luaL_getmetatable(L, "PHF*");
 	lua_setmetatable(L, -2);
 
-	if (type == LUA_TNUMBER) {
-		if ((error = phf_addkeys(L, 6, reinterpret_cast<uint64_t **>(&keys), &n, &z)))
-			goto error;
-
-		if (n == 0)
-			goto empty;
-
-		if ((error = phf_init_uint64(&phf->ctx, reinterpret_cast<uint64_t *>(keys), n, l, a, seed, nodiv)))
-			goto error;
-
-		phf->hash = &phf_hash_uint64;
-	} else {
-		if ((error = phf_addkeys(L, 6, reinterpret_cast<phf_string_t **>(&keys), &n, &z)))
-			goto error;
-
-		if (n == 0)
-			goto empty;
-
-		if ((error = phf_init_string(&phf->ctx, reinterpret_cast<phf_string_t *>(keys), n, l, a, seed, nodiv)))
-			goto error;
-
-		phf->hash = &phf_hash_string;
+	switch ((error = phf_addkeys(L, 1, reinterpret_cast<uint32_t **>(&keys), &n))) {
+	case 0:
+		break;
+	case ERANGE:
+		goto uint64;
+	case EINVAL:
+		goto string;
+	default:
+		goto error;
 	}
 
+	if (n == 0)
+		goto empty;
+
+	if ((error = phf_init_uint32(&phf->ctx, reinterpret_cast<uint32_t *>(keys), n, l, a, seed, nodiv)))
+		goto error;
+
+	phf->hash = &phf_hash_uint32;
+
+	goto done;
+uint64:
+	switch ((error = phf_addkeys(L, 1, reinterpret_cast<uint64_t **>(&keys), &n))) {
+	case 0:
+		break;
+	case EINVAL:
+		goto string;
+	default:
+		goto error;
+	}
+
+	if (n == 0)
+		goto empty;
+
+	if ((error = phf_init_uint64(&phf->ctx, reinterpret_cast<uint64_t *>(keys), n, l, a, seed, nodiv)))
+		goto error;
+
+	phf->hash = &phf_hash_uint64;
+
+	goto done;
+string:
+	if ((error = phf_addkeys(L, 1, reinterpret_cast<phf_string_t **>(&keys), &n)))
+		goto error;
+
+	if (n == 0)
+		goto empty;
+
+	if ((error = phf_init_string(&phf->ctx, reinterpret_cast<phf_string_t *>(keys), n, l, a, seed, nodiv)))
+		goto error;
+
+	phf->hash = &phf_hash_string;
+
+	goto done;
+done:
 	free(keys);
+
+	PHF::compact(&phf->ctx);
 
 	return 1;
 empty:
