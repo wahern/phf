@@ -281,6 +281,18 @@ template size_t PHF::uniq<phf_string_t>(phf_string_t[], const size_t);
 template size_t PHF::uniq<std::string>(std::string[], const size_t);
 #endif
 
+PHF_PUBLIC size_t phf_uniq_uint32(uint32_t k[], const size_t n) {
+	return PHF::uniq(k, n);
+} /* phf_hash_uint32() */
+
+PHF_PUBLIC size_t phf_uniq_uint64(uint64_t k[], const size_t n) {
+	return PHF::uniq(k, n);
+} /* phf_hash_uint64() */
+
+PHF_PUBLIC size_t phf_uniq_string(phf_string_t k[], const size_t n) {
+	return PHF::uniq(k, n);
+} /* phf_hash_string() */
+
 
 /*
  * H A S H  P R I M I T I V E S
@@ -751,7 +763,6 @@ PHF_PUBLIC void PHF::destroy(struct phf *phf) {
 	phf->g = NULL;
 } /* PHF::destroy() */
 
-
 PHF_PUBLIC int phf_init_uint32(struct phf *phf, uint32_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
 	if (nodiv)
 		return PHF::init<uint32_t, true>(phf, k, n, lambda, alpha, seed);
@@ -773,15 +784,15 @@ PHF_PUBLIC int phf_init_string(struct phf *phf, phf_string_t *k, size_t n, size_
 		return PHF::init<phf_string_t, false>(phf, k, n, lambda, alpha, seed);
 } /* phf_init_string() */
 
-PHF_PUBLIC phf_hash_t phf_hash_uint32(struct phf *phf, uint32_t k) {
+PHF_PUBLIC phf_hash_t phf_hash_uint32(struct phf *phf, const uint32_t k) {
 	return PHF::hash(phf, k);
 } /* phf_hash_uint32() */
 
-PHF_PUBLIC phf_hash_t phf_hash_uint64(struct phf *phf, uint64_t k) {
+PHF_PUBLIC phf_hash_t phf_hash_uint64(struct phf *phf, const uint64_t k) {
 	return PHF::hash(phf, k);
 } /* phf_hash_uint64() */
 
-PHF_PUBLIC phf_hash_t phf_hash_string(struct phf *phf, phf_string_t k) {
+PHF_PUBLIC phf_hash_t phf_hash_string(struct phf *phf, const phf_string_t k) {
 	return PHF::hash(phf, k);
 } /* phf_hash_string() */
 

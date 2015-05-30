@@ -218,13 +218,17 @@ extern template phf_hash_t PHF::hash<std::string>(struct phf *, std::string);
 extern "C" {
 #endif
 
-PHF_PUBLIC phf_error_t phf_init_uint32(struct phf *, uint32_t *, size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
-PHF_PUBLIC phf_error_t phf_init_uint64(struct phf *, uint64_t *, size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
-PHF_PUBLIC phf_error_t phf_init_string(struct phf *, phf_string_t *, size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
+PHF_PUBLIC size_t phf_uniq_uint32(uint32_t *, const size_t);
+PHF_PUBLIC size_t phf_uniq_uint64(uint64_t *, const size_t);
+PHF_PUBLIC size_t phf_uniq_string(phf_string_t *, const size_t);
 
-PHF_PUBLIC phf_hash_t phf_hash_uint32(struct phf *, uint32_t);
-PHF_PUBLIC phf_hash_t phf_hash_uint64(struct phf *, uint64_t);
-PHF_PUBLIC phf_hash_t phf_hash_string(struct phf *, phf_string_t);
+PHF_PUBLIC phf_error_t phf_init_uint32(struct phf *, const uint32_t *, const size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
+PHF_PUBLIC phf_error_t phf_init_uint64(struct phf *, const uint64_t *, const size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
+PHF_PUBLIC phf_error_t phf_init_string(struct phf *, const phf_string_t *, const size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
+
+PHF_PUBLIC phf_hash_t phf_hash_uint32(struct phf *, const uint32_t);
+PHF_PUBLIC phf_hash_t phf_hash_uint64(struct phf *, const uint64_t);
+PHF_PUBLIC phf_hash_t phf_hash_string(struct phf *, const phf_string_t);
 
 PHF_PUBLIC void phf_destroy(struct phf *);
 
@@ -238,6 +242,11 @@ PHF_PUBLIC void phf_destroy(struct phf *);
  *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #if PHF_HAVE_GENERIC
+
+#define phf_uniq(k, n) _Generic((k), \
+	uint32_t*: phf_uniq_uint32((k), (n)), \
+	uint64_t*: phf_uniq_uint64((k), (n)), \
+	phf_string_t*: phf_uniq_string((k), (n)))
 
 #define phf_init(f, k, ...) _Generic((k), \
 	uint32_t*: phf_init_uint32((f), (k), __VA_ARGS__), \
@@ -254,15 +263,20 @@ PHF_PUBLIC void phf_destroy(struct phf *);
 #define phf_choose(cond, a, b) __builtin_choose_expr(cond, a, b)
 #define phf_istype(E, T) __builtin_types_compatible_p(__typeof__(E), T)
 
+#define phf_uniq(k, n) \
+	phf_choose(phf_istype(*(k), uint32_t), phf_uniq_uint32((k), (n)), \
+	phf_choose(phf_istype(*(k), uint64_t), phf_uniq_uint64((k), (n)), \
+	phf_choose(phf_istype(*(k), phf_string_t), phf_uniq_string((k), (n)))), (void)0)
+
 #define phf_init(f, k, ...) \
 	phf_choose(phf_istype(*(k), uint32_t), phf_init_uint32((f), (k), __VA_ARGS__), \
 	phf_choose(phf_istype(*(k), uint64_t), phf_init_uint64((f), (k), __VA_ARGS__), \
-	phf_choose(phf_istype(*(k), phf_string_t), phf_init_string((f), (k), __VA_ARGS__))), (void)0) \
+	phf_choose(phf_istype(*(k), phf_string_t), phf_init_string((f), (k), __VA_ARGS__))), (void)0)
 
 #define phf_hash(f, k) \
 	phf_choose(phf_istype((k), uint32_t), phf_hash_uint32((f), (k)), \
 	phf_choose(phf_istype((k), uint64_t), phf_hash_uint64((f), (k)), \
-	phf_choose(phf_istype((k), phf_string_t), phf_hash_string((f), (k)))), (void)0) \
+	phf_choose(phf_istype((k), phf_string_t), phf_hash_string((f), (k)))), (void)0)
 
 #endif
 
