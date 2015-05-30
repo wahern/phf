@@ -74,6 +74,10 @@
 	(phf_has_attribute(visibility) || PHF_GNUC_PREREQ(4, 0))
 #endif
 
+#ifndef PHF_HAVE_COMPUTED_GOTOS
+#define PHF_HAVE_COMPUTED_GOTOS (defined __GNUC__)
+#endif
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #if __cplusplus < 201103L
@@ -138,10 +142,15 @@ struct phf {
 	size_t d_max; /* maximum displacement value in g */
 
 	enum {
-		PHF_G_UINT8 = 1,
-		PHF_G_UINT16,
-		PHF_G_UINT32,
-	} g_type;
+		PHF_G_UINT8_MOD_R = 1,
+		PHF_G_UINT8_BAND_R,
+		PHF_G_UINT16_MOD_R,
+		PHF_G_UINT16_BAND_R,
+		PHF_G_UINT32_MOD_R,
+		PHF_G_UINT32_BAND_R,
+	} g_op;
+
+	const void *g_jmp;
 }; /* struct phf */
 
 
@@ -156,16 +165,26 @@ struct phf {
 #endif
 
 namespace PHF {
+	template<typename key_t>
+	PHF_PUBLIC size_t uniq(key_t[], const size_t);
+
 	template<typename key_t, bool nodiv>
 	PHF_PUBLIC phf_error_t init(struct phf *, const key_t[], const size_t, const size_t, const size_t, const phf_seed_t);
+
+	PHF_PUBLIC void compact(struct phf *);
 
 	template<typename key_t>
 	PHF_PUBLIC phf_hash_t hash(struct phf *, key_t);
 
 	PHF_PUBLIC void destroy(struct phf *);
-
-	static void compact(struct phf *);
 }
+
+extern template size_t PHF::uniq<uint32_t>(uint32_t[], const size_t);
+extern template size_t PHF::uniq<uint64_t>(uint64_t[], const size_t);
+extern template size_t PHF::uniq<phf_string_t>(phf_string_t[], const size_t);
+#if !PHF_NO_LIBCXX
+extern template size_t PHF::uniq<std::string>(std::string[], const size_t);
+#endif
 
 extern template phf_error_t PHF::init<uint32_t, true>(struct phf *, const uint32_t[], const size_t, const size_t, const size_t, const phf_seed_t);
 extern template phf_error_t PHF::init<uint64_t, true>(struct phf *, const uint64_t[], const size_t, const size_t, const size_t, const phf_seed_t);

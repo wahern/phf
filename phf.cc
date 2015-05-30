@@ -224,6 +224,65 @@ static inline void phf_clrall(phf_bits_t *set, size_t n) {
 
 
 /*
+ * K E Y  D E D U P L I C A T I O N
+ *
+ * Auxiliary routine to ensure uniqueness of each key in array.
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+namespace PHF {
+	namespace Uniq {
+		static bool operator!=(const phf_string_t &a, const phf_string_t &b) {
+			return a.n != b.n || 0 != memcmp(a.p, b.p, a.n);
+		}
+
+		template<typename T>
+		static int cmp(const T *a, const T *b) {
+			if (*a > *b)
+				return -1;
+			if (*a < *b)
+				return 1;
+			return 0;
+		} /* cmp() */
+
+		template<>
+		int cmp(const phf_string_t *a, const phf_string_t *b) {
+			int cmp;
+			if ((cmp = memcmp(a->p, b->p, PHF_MIN(a->n, b->n))))
+				return cmp;
+			if (a->n > b->n)
+				return -1;
+			if (a->n < b->n)
+				return 1;
+			return 0;
+		} /* cmp<phf_string_t>() */
+	} /* Uniq:: */
+} /* PHF:: */
+
+template<typename key_t>
+PHF_PUBLIC size_t PHF::uniq(key_t k[], const size_t n) {
+	using namespace PHF::Uniq;
+	size_t i, j;
+
+	qsort(k, n, sizeof *k, reinterpret_cast<int(*)(const void *, const void *)>(&cmp<key_t>));
+
+	for (i = 1, j = 0; i < n; i++) {
+		if (k[i] != k[j])
+			k[++j] = k[i];
+	}
+
+	return (n > 0)? j + 1 : 0;
+} /* PHF::uniq() */
+
+template size_t PHF::uniq<uint32_t>(uint32_t[], const size_t);
+template size_t PHF::uniq<uint64_t>(uint64_t[], const size_t);
+template size_t PHF::uniq<phf_string_t>(phf_string_t[], const size_t);
+#if !PHF_NO_LIBCXX
+template size_t PHF::uniq<std::string>(std::string[], const size_t);
+#endif
+
+
+/*
  * H A S H  P R I M I T I V E S
  *
  * Universal hash based on MurmurHash3_x86_32. Variants for 32- and 64-bit
@@ -538,7 +597,8 @@ retry:
 	g = NULL;
 
 	phf->d_max = d_max;
-	phf->g_type = phf::PHF_G_UINT32;
+	phf->g_op = (nodiv)? phf::PHF_G_UINT32_BAND_R : phf::PHF_G_UINT32_MOD_R;
+	phf->g_jmp = NULL;
 
 	error = 0;
 
@@ -558,6 +618,10 @@ clean:
 /*
  * D I S P L A C E M E N T  M A P  C O M P A C T I O N
  *
+ * By default the displacement map is an array of uint32_t. This routine
+ * compacts the map by using the smallest primitive type that will fit the
+ * largest displacement value.
+ *
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 template<typename dst_t, typename src_t>
@@ -568,20 +632,25 @@ static inline void phf_memmove(dst_t *dst, src_t *src, size_t n) {
 	}
 } /* phf_memmove() */
 
-static void PHF::compact(struct phf *phf) {
+PHF_PUBLIC void PHF::compact(struct phf *phf) {
 	size_t size = 0;
 	void *tmp;
 
-	if (phf->g_type != phf::PHF_G_UINT32)
+	switch (phf->g_op) {
+	case phf::PHF_G_UINT32_MOD_R:
+	case phf::PHF_G_UINT32_BAND_R:
+		break;
+	default:
 		return; /* already compacted */
+	}
 
 	if (phf->d_max <= 255) {
 		phf_memmove(reinterpret_cast<uint8_t *>(phf->g), reinterpret_cast<uint32_t *>(phf->g), phf->r);
-		phf->g_type = phf::PHF_G_UINT8;
+		phf->g_op = (phf->nodiv)? phf::PHF_G_UINT8_BAND_R : phf::PHF_G_UINT8_MOD_R;
 		size = sizeof (uint8_t);
 	} else if (phf->d_max <= 65535) {
 		phf_memmove(reinterpret_cast<uint16_t *>(phf->g), reinterpret_cast<uint32_t *>(phf->g), phf->r);
-		phf->g_type = phf::PHF_G_UINT16;
+		phf->g_op = (phf->nodiv)? phf::PHF_G_UINT16_BAND_R : phf::PHF_G_UINT16_MOD_R;
 		size = sizeof (uint16_t);
 	} else {
 		return; /* nothing to compact */
@@ -612,11 +681,8 @@ template int PHF::init<phf_string_t, false>(struct phf *, const phf_string_t[], 
 template int PHF::init<std::string, false>(struct phf *, const std::string[], const size_t, const size_t, const size_t, const phf_seed_t);
 #endif
 
-#define phf_hash_(nodiv, ...) \
-	((nodiv)? phf_hash_<true>(__VA_ARGS__) : phf_hash_<false>(__VA_ARGS__))
-
 template<bool nodiv, typename map_t, typename key_t>
-static inline phf_hash_t (phf_hash_)(map_t *g, key_t k, uint32_t seed, size_t r, size_t m) {
+static inline phf_hash_t phf_hash_(map_t *g, key_t k, uint32_t seed, size_t r, size_t m) {
 	if (nodiv) {
 		uint32_t d = g[phf_g(k, seed) & (r - 1)];
 
@@ -630,17 +696,47 @@ static inline phf_hash_t (phf_hash_)(map_t *g, key_t k, uint32_t seed, size_t r,
 
 template<typename T>
 PHF_PUBLIC phf_hash_t PHF::hash(struct phf *phf, T k) {
-	switch (phf->g_type) {
-	case phf::PHF_G_UINT8:
-		return phf_hash_(phf->nodiv, reinterpret_cast<uint8_t *>(phf->g), k, phf->seed, phf->r, phf->m);
-	case phf::PHF_G_UINT16:
-		return phf_hash_(phf->nodiv, reinterpret_cast<uint16_t *>(phf->g), k, phf->seed, phf->r, phf->m);
-	case phf::PHF_G_UINT32:
-		return phf_hash_(phf->nodiv, reinterpret_cast<uint32_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+#if PHF_HAVE_COMPUTED_GOTOS && !PHF_NO_COMPUTED_GOTOS
+	static const void *const jmp[] = {
+		NULL,
+		&&uint8_mod_r, &&uint8_band_r,
+		&&uint16_mod_r, &&uint16_band_r,
+		&&uint32_mod_r, &&uint32_band_r,
+	};
+
+	goto *((phf->g_jmp)? phf->g_jmp : (phf->g_jmp = jmp[phf->g_op]));
+
+	uint8_mod_r:
+		return phf_hash_<false>(reinterpret_cast<uint8_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	uint8_band_r:
+		return phf_hash_<true>(reinterpret_cast<uint8_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	uint16_mod_r:
+		return phf_hash_<false>(reinterpret_cast<uint16_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	uint16_band_r:
+		return phf_hash_<true>(reinterpret_cast<uint16_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	uint32_mod_r:
+		return phf_hash_<false>(reinterpret_cast<uint32_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	uint32_band_r:
+		return phf_hash_<true>(reinterpret_cast<uint32_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+#else
+	switch (phf->g_op) {
+	case phf::PHF_G_UINT8_MOD_R:
+		return phf_hash_<false>(reinterpret_cast<uint8_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	case phf::PHF_G_UINT8_BAND_R:
+		return phf_hash_<true>(reinterpret_cast<uint8_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	case phf::PHF_G_UINT16_MOD_R:
+		return phf_hash_<false>(reinterpret_cast<uint16_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	case phf::PHF_G_UINT16_BAND_R:
+		return phf_hash_<true>(reinterpret_cast<uint16_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	case phf::PHF_G_UINT32_MOD_R:
+		return phf_hash_<false>(reinterpret_cast<uint32_t *>(phf->g), k, phf->seed, phf->r, phf->m);
+	case phf::PHF_G_UINT32_BAND_R:
+		return phf_hash_<true>(reinterpret_cast<uint32_t *>(phf->g), k, phf->seed, phf->r, phf->m);
 	default:
 		abort();
 		return 0;
 	}
+#endif
 } /* PHF::hash() */
 
 template phf_hash_t PHF::hash<uint32_t>(struct phf *, uint32_t);
@@ -1065,6 +1161,15 @@ static void addkey(phf_string_t **k, size_t *n, size_t *z, char *src) {
 	addkey(k, n, z, src, strlen(src));
 } /* addkey() */
 
+#if !PHF_NO_LIBCXX
+static void addkey(std::string **k, size_t *n, size_t *z, char *src, size_t len) {
+	pushkey(k, n, z, std::string(src, len));
+} /* addkey() */
+
+static void addkey(std::string **k, size_t *n, size_t *z, char *src) {
+	addkey(k, n, z, src, strlen(src));
+} /* addkey() */
+#endif
 
 template<typename T>
 static void addkeys(T **k, size_t *n, size_t *z, char **src, int count) {
@@ -1151,17 +1256,23 @@ static inline void exec(int argc, char **argv, size_t lambda, size_t alpha, size
 	addkeys(&k, &n, &z, argv, argc);
 	addkeys(&k, &n, &z, stdin, &data);
 
+	size_t m = PHF::uniq(k, n);
 	if (verbose)
-		warnx("loaded %zu keys", n);
+		warnx("loaded %zu keys (%zu duplicates)", m, (n - m));
+	n = m;
 
 	begin = clock();
 	PHF::init<T, nodiv>(&phf, k, n, lambda, alpha, seed);
 	end = clock();
 
-	PHF::compact(&phf);
 
 	if (verbose) {
 		warnx("found perfect hash for %zu keys in %fs", n, (double)(end - begin) / CLOCKS_PER_SEC);
+
+		begin = clock();
+		PHF::compact(&phf);
+		end = clock();
+		warnx("compacted displacement map in %fs", (double)(end - begin) / CLOCKS_PER_SEC);
 
 		int d_bits = ffsl((long)phf_powerup(phf.d_max));
 		double k_bits = ((double)phf.r * d_bits) / n;
@@ -1169,13 +1280,11 @@ static inline void exec(int argc, char **argv, size_t lambda, size_t alpha, size
 		warnx("r:%zu m:%zu d_max:%zu d_bits:%d k_bits:%.2f g_load:%.2f", phf.r, phf.m, phf.d_max, d_bits, k_bits, g_load);
 
 		size_t x = 0;
-
 		begin = clock();
 		for (size_t i = 0; i < n; i++) {
 			x += PHF::hash(&phf, k[i]);
 		}
 		end = clock();
-
 		warnx("hashed %zu keys in %fs (x:%zu)", n, (double)(end - begin) / CLOCKS_PER_SEC, x);
 	}
 
@@ -1224,7 +1333,10 @@ int main(int argc, char **argv) {
 	enum {
 		PHF_UINT32,
 		PHF_UINT64,
-		PHF_STRING
+		PHF_STRING,
+#if !PHF_NO_LIBCXX
+		PHF_STD_STRING
+#endif
 	} type = PHF_UINT32;
 	bool primes = 0;
 	extern char *optarg;
@@ -1255,6 +1367,10 @@ int main(int argc, char **argv) {
 				type = PHF_UINT64;
 			} else if (!strcmp(optarg, "string")) {
 				type = PHF_STRING;
+#if !PHF_NO_LIBCXX
+			} else if (!strcmp(optarg, "std::string")) {
+				type = PHF_STD_STRING;
+#endif
 			} else {
 				errx(1, "%s: invalid key type", optarg);
 			}
@@ -1321,6 +1437,14 @@ int main(int argc, char **argv) {
 		else
 			exec<phf_string_t, false>(argc, argv, lambda, alpha, seed, verbose, noprint);
 		break;
+#if !PHF_NO_LIBCXX
+	case PHF_STD_STRING:
+		if (nodiv)
+			exec<std::string, true>(argc, argv, lambda, alpha, seed, verbose, noprint);
+		else
+			exec<std::string, false>(argc, argv, lambda, alpha, seed, verbose, noprint);
+		break;
+#endif
 	}
 
 	return 0;
