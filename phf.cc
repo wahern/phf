@@ -763,26 +763,30 @@ PHF_PUBLIC void PHF::destroy(struct phf *phf) {
 	phf->g = NULL;
 } /* PHF::destroy() */
 
-PHF_PUBLIC int phf_init_uint32(struct phf *phf, uint32_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
+PHF_PUBLIC int phf_init_uint32(struct phf *phf, const uint32_t *k, const size_t n, const size_t lambda, const size_t alpha, const phf_seed_t seed, const bool nodiv) {
 	if (nodiv)
 		return PHF::init<uint32_t, true>(phf, k, n, lambda, alpha, seed);
 	else
 		return PHF::init<uint32_t, false>(phf, k, n, lambda, alpha, seed);
 } /* phf_init_uint32() */
 
-PHF_PUBLIC int phf_init_uint64(struct phf *phf, uint64_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
+PHF_PUBLIC int phf_init_uint64(struct phf *phf, const uint64_t *k, const size_t n, const size_t lambda, const size_t alpha, const phf_seed_t seed, const bool nodiv) {
 	if (nodiv)
 		return PHF::init<uint64_t, true>(phf, k, n, lambda, alpha, seed);
 	else
 		return PHF::init<uint64_t, false>(phf, k, n, lambda, alpha, seed);
 } /* phf_init_uint64() */
 
-PHF_PUBLIC int phf_init_string(struct phf *phf, phf_string_t *k, size_t n, size_t lambda, size_t alpha, phf_seed_t seed, bool nodiv) {
+PHF_PUBLIC int phf_init_string(struct phf *phf, const phf_string_t *k, const size_t n, const size_t lambda, const size_t alpha, const phf_seed_t seed, const bool nodiv) {
 	if (nodiv)
 		return PHF::init<phf_string_t, true>(phf, k, n, lambda, alpha, seed);
 	else
 		return PHF::init<phf_string_t, false>(phf, k, n, lambda, alpha, seed);
 } /* phf_init_string() */
+
+PHF_PUBLIC void phf_compact(struct phf *phf) {
+	PHF::compact(phf);
+} /* phf_compact() */
 
 PHF_PUBLIC phf_hash_t phf_hash_uint32(struct phf *phf, const uint32_t k) {
 	return PHF::hash(phf, k);

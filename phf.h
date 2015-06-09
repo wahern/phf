@@ -222,9 +222,11 @@ PHF_PUBLIC size_t phf_uniq_uint32(uint32_t *, const size_t);
 PHF_PUBLIC size_t phf_uniq_uint64(uint64_t *, const size_t);
 PHF_PUBLIC size_t phf_uniq_string(phf_string_t *, const size_t);
 
-PHF_PUBLIC phf_error_t phf_init_uint32(struct phf *, const uint32_t *, const size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
-PHF_PUBLIC phf_error_t phf_init_uint64(struct phf *, const uint64_t *, const size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
-PHF_PUBLIC phf_error_t phf_init_string(struct phf *, const phf_string_t *, const size_t, const size_t, const size_t, const phf_seed_t, bool nodiv);
+PHF_PUBLIC phf_error_t phf_init_uint32(struct phf *, const uint32_t *, const size_t, const size_t, const size_t, const phf_seed_t, const bool nodiv);
+PHF_PUBLIC phf_error_t phf_init_uint64(struct phf *, const uint64_t *, const size_t, const size_t, const size_t, const phf_seed_t, const bool nodiv);
+PHF_PUBLIC phf_error_t phf_init_string(struct phf *, const phf_string_t *, const size_t, const size_t, const size_t, const phf_seed_t, const bool nodiv);
+
+PHF_PUBLIC void phf_compact(struct phf *);
 
 PHF_PUBLIC phf_hash_t phf_hash_uint32(struct phf *, const uint32_t);
 PHF_PUBLIC phf_hash_t phf_hash_uint64(struct phf *, const uint64_t);
@@ -243,20 +245,20 @@ PHF_PUBLIC void phf_destroy(struct phf *);
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #if PHF_HAVE_GENERIC
 
-#define phf_uniq(k, n) _Generic((k), \
-	uint32_t*: phf_uniq_uint32((k), (n)), \
-	uint64_t*: phf_uniq_uint64((k), (n)), \
-	phf_string_t*: phf_uniq_string((k), (n)))
+#define phf_uniq(k, n) _Generic(*(k), \
+	uint32_t: phf_uniq_uint32, \
+	uint64_t: phf_uniq_uint64, \
+	phf_string_t: phf_uniq_string)((k), (n))
 
-#define phf_init(f, k, ...) _Generic((k), \
-	uint32_t*: phf_init_uint32((f), (k), __VA_ARGS__), \
-	uint64_t*: phf_init_uint64((f), (k), __VA_ARGS__), \
-	phf_string_t*: phf_init_string((f), (k), __VA_ARGS__))
+#define phf_init(f, k, ...) _Generic(*(k), \
+	uint32_t: phf_init_uint32, \
+	uint64_t: phf_init_uint64, \
+	phf_string_t: phf_init_string)((f), (k), __VA_ARGS__)
 
 #define phf_hash(f, k) _Generic((k), \
-	uint32_t: phf_hash_uint32((f), (k)), \
-	uint64_t: phf_hash_uint64((f), (k)), \
-	phf_string_t: phf_hash_string((f), (k)))
+	uint32_t: phf_hash_uint32, \
+	uint64_t: phf_hash_uint64, \
+	phf_string_t: phf_hash_string)((f), (k))
 
 #elif PHF_HAVE_BUILTIN_TYPES_COMPATIBLE_P && PHF_HAVE_BUILTIN_CHOOSE_EXPR
 
@@ -264,19 +266,22 @@ PHF_PUBLIC void phf_destroy(struct phf *);
 #define phf_istype(E, T) __builtin_types_compatible_p(__typeof__(E), T)
 
 #define phf_uniq(k, n) \
-	phf_choose(phf_istype(*(k), uint32_t), phf_uniq_uint32((k), (n)), \
-	phf_choose(phf_istype(*(k), uint64_t), phf_uniq_uint64((k), (n)), \
-	phf_choose(phf_istype(*(k), phf_string_t), phf_uniq_string((k), (n)))), (void)0)
+	phf_choose(phf_istype(*(k), uint32_t), phf_uniq_uint32((uint32_t *)(k), (n)), \
+	phf_choose(phf_istype(*(k), uint64_t), phf_uniq_uint64((uint64_t *)(k), (n)), \
+	phf_choose(phf_istype(*(k), phf_string_t), phf_uniq_string((phf_string_t *)(k), (n)), \
+	(void)0)))
 
 #define phf_init(f, k, ...) \
-	phf_choose(phf_istype(*(k), uint32_t), phf_init_uint32((f), (k), __VA_ARGS__), \
-	phf_choose(phf_istype(*(k), uint64_t), phf_init_uint64((f), (k), __VA_ARGS__), \
-	phf_choose(phf_istype(*(k), phf_string_t), phf_init_string((f), (k), __VA_ARGS__))), (void)0)
+	phf_choose(phf_istype(*(k), uint32_t), phf_init_uint32((f), (const uint32_t *)(k), __VA_ARGS__), \
+	phf_choose(phf_istype(*(k), uint64_t), phf_init_uint64((f), (const uint64_t *)(k), __VA_ARGS__), \
+	phf_choose(phf_istype(*(k), phf_string_t), phf_init_string((f), (const phf_string_t *)(k), __VA_ARGS__), \
+	(void)0)))
 
-#define phf_hash(f, k) \
-	phf_choose(phf_istype((k), uint32_t), phf_hash_uint32((f), (k)), \
-	phf_choose(phf_istype((k), uint64_t), phf_hash_uint64((f), (k)), \
-	phf_choose(phf_istype((k), phf_string_t), phf_hash_string((f), (k)))), (void)0)
+#define phf_hash(f, k) ((*(phf_hash_t (*)()) \
+	phf_choose(phf_istype((k), uint32_t), &phf_hash_uint32, \
+	phf_choose(phf_istype((k), uint64_t), &phf_hash_uint64, \
+	phf_choose(phf_istype((k), phf_string_t), &phf_hash_string, \
+	(void)0))))((f), (k)))
 
 #endif
 
