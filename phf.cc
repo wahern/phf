@@ -43,6 +43,16 @@
 #include "phf.h"
 
 
+#ifndef PHF_HAVE_ATTRIBUTE_FALLTHROUGH
+#define PHF_HAVE_ATTRIBUTE_FALLTHROUGH phf_has_attribute(fallthrough)
+#endif
+
+#if PHF_HAVE_ATTRIBUTE_FALLTHROUGH
+#define PHF_FALLTHROUGH __attribute__((fallthrough))
+#else
+#define PHF_FALLTHROUGH (void)0 /* fall through */
+#endif
+
 #ifdef __clang__
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-label"
@@ -419,8 +429,10 @@ static inline uint32_t phf_round32(const unsigned char *p, size_t n, uint32_t h1
 	switch (n & 3) {
 	case 3:
 		k1 |= p[2] << 8;
+		PHF_FALLTHROUGH;
 	case 2:
 		k1 |= p[1] << 16;
+		PHF_FALLTHROUGH;
 	case 1:
 		k1 |= p[0] << 24;
 		h1 = phf_round32(k1, h1);

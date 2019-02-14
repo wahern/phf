@@ -39,11 +39,15 @@
 
 #define PHF_GNUC_PREREQ(M, m) (__GNUC__ > (M) || (__GNUC__ == (M) && __GNUC_MINOR__ >= (m)))
 
-#ifdef __clang__
+#ifdef __has_extension
 #define phf_has_extension(x) __has_extension(x)
-#define phf_has_attribute(x) __has_attribute(x)
 #else
 #define phf_has_extension(x) 0
+#endif
+
+#ifdef __has_attribute
+#define phf_has_attribute(x) __has_attribute(x)
+#else
 #define phf_has_attribute(x) 0
 #endif
 
