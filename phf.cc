@@ -1013,7 +1013,7 @@ static int phf_new(lua_State *L) {
 	bool nodiv = static_cast<bool>(lua_toboolean(L, 5));
 	void *keys = NULL;
 	struct phfctx *phf;
-	size_t n;
+	size_t n = 0;
 	int error;
 
 	lua_settop(L, 5);
