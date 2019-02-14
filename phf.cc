@@ -1,7 +1,7 @@
 /* ==========================================================================
  * phf.cc - Tiny perfect hash function library.
  * --------------------------------------------------------------------------
- * Copyright (c) 2014-2015  William Ahern
+ * Copyright (c) 2014-2015, 2019  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -30,20 +30,38 @@
 #include <string.h>   /* memset(3) */
 #include <errno.h>    /* errno */
 #include <assert.h>   /* assert(3) */
+
 #if !PHF_NO_LIBCXX
-#include <string>     /* std::string */
+#include <algorithm>   /* std::sort */
+#include <iterator>    /* std::begin std::end */
+#include <new>         /* std::nothrow */
+#include <string>      /* std::string */
 #endif
+#include <type_traits> /* std::is_standard_layout std::is_trivial */
+#include <utility>     /* std::move */
 
 #include "phf.h"
 
 
+#ifndef PHF_HAVE_ATTRIBUTE_FALLTHROUGH
+#define PHF_HAVE_ATTRIBUTE_FALLTHROUGH phf_has_attribute(fallthrough)
+#endif
+
+#if PHF_HAVE_ATTRIBUTE_FALLTHROUGH
+#define PHF_FALLTHROUGH __attribute__((fallthrough))
+#else
+#define PHF_FALLTHROUGH (void)0 /* fall through */
+#endif
+
 #ifdef __clang__
 #pragma clang diagnostic ignored "-Wunused-function"
+#pragma clang diagnostic ignored "-Wunused-label"
 #if __cplusplus < 201103L
 #pragma clang diagnostic ignored "-Wc++11-long-long"
 #endif
 #elif PHF_GNUC_PREREQ(4, 6)
 #pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wunused-label"
 #if __cplusplus < 201103L
 #pragma GCC diagnostic ignored "-Wlong-long"
 #pragma GCC diagnostic ignored "-Wformat" // %zu
@@ -64,6 +82,64 @@
 #define PHF_MAX(a, b) (((a) > (b))? (a) : (b))
 #define PHF_ROTL(x, y) (((x) << (y)) | ((x) >> (PHF_BITS(x) - (y))))
 #define PHF_COUNTOF(a) (sizeof (a) / sizeof *(a))
+
+#if PHF_NO_LIBCXX
+#define PHF_IFELSE_LIBCXX(a, b) b
+#else
+#define PHF_IFELSE_LIBCXX(a, b) a
+#endif
+
+
+/*
+ * A L L O C A T I O N  R O U T I N E S
+ *
+ * C allocation semantics in a nominally safe manner for C++.
+ *
+ * NOTE: phf.cc wasn't written as a proper C++ library, but refactored from
+ * C to C++ primarily to make use of templates for the convenience of the
+ * command-line utility, and secondarily as a C++ learning exercise.
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+template<typename T>
+static phf_error_t phf_calloc(T **p, size_t count)
+{
+#if !PHF_NO_LIBCXX
+	if (!std::is_trivially_copyable<T>::value) {
+		if (SIZE_MAX / sizeof **p < count)
+			return ENOMEM;
+
+		if (!(*p = static_cast<T*>(malloc(count * sizeof **p))))
+			return errno;
+
+		for (size_t i = 0; i < count; i++)
+			new (&(*p)[i]) T;
+
+		return 0;
+	}
+#else
+	static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
+#endif
+	if (!(*p = static_cast<T*>(calloc(count, sizeof **p))))
+		return errno;
+
+	return 0;
+} /* phf_calloc() */
+
+template<typename T>
+static void phf_freearray(T *p, size_t count)
+{
+#if !PHF_NO_LIBCXX
+	if (!std::is_trivially_destructible<T>::value) {
+		for (size_t i = 0; i < count; i++)
+			p[i].~T();
+	}
+#else
+	static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
+#endif
+	(void)count;
+	free(p);
+} /* phf_freearray() */
 
 
 /*
@@ -256,6 +332,20 @@ namespace PHF {
 				return 1;
 			return 0;
 		} /* cmp<phf_string_t>() */
+
+		template<typename T>
+		static void sort(T k[], const size_t n) {
+
+#if !PHF_NO_LIBCXX
+			if (!std::is_trivially_copyable<T>::value) {
+				std::sort(k, &k[n]);
+				return;
+			}
+#else
+			static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
+#endif
+			qsort(k, n, sizeof *k, reinterpret_cast<int(*)(const void *, const void *)>(&cmp<T>));
+		} /* sort() */
 	} /* Uniq:: */
 } /* PHF:: */
 
@@ -264,7 +354,7 @@ PHF_PUBLIC size_t PHF::uniq(key_t k[], const size_t n) {
 	using namespace PHF::Uniq;
 	size_t i, j;
 
-	qsort(k, n, sizeof *k, reinterpret_cast<int(*)(const void *, const void *)>(&cmp<key_t>));
+	sort<key_t>(k, n);
 
 	for (i = 1, j = 0; i < n; i++) {
 		if (k[i] != k[j])
@@ -339,8 +429,10 @@ static inline uint32_t phf_round32(const unsigned char *p, size_t n, uint32_t h1
 	switch (n & 3) {
 	case 3:
 		k1 |= p[2] << 8;
+		PHF_FALLTHROUGH;
 	case 2:
 		k1 |= p[1] << 16;
+		PHF_FALLTHROUGH;
 	case 1:
 		k1 |= p[0] << 24;
 		h1 = phf_round32(k1, h1);
@@ -461,6 +553,20 @@ static bool operator==(const phf_string_t &a, const phf_string_t &b) {
 	return a.n == b.n && 0 == memcmp(a.p, b.p, a.n);
 }
 
+static bool operator<(const phf_string_t &a, const phf_string_t &b) {
+	int cmp = memcmp(a.p, b.p, PHF_MIN(a.n, b.n));
+	if (cmp)
+		return cmp < 0;
+	return a.n < b.n;
+}
+
+static bool operator>(const phf_string_t &a, const phf_string_t &b) {
+	int cmp = memcmp(a.p, b.p, PHF_MIN(a.n, b.n));
+	if (cmp)
+		return cmp > 0;
+	return a.n > b.n;
+}
+
 template<typename T>
 struct phf_key {
 	T k;
@@ -487,6 +593,29 @@ static int phf_keycmp(const phf_key<T> *a, const phf_key<T> *b) {
 
 	return 0;
 } /* phf_keycmp() */
+
+template<typename T>
+static bool operator>(const phf_key<T> &a, const phf_key<T> &b) {
+	return phf_keycmp(&a, &b) > 0;
+}
+
+template<typename T>
+static bool operator<(const phf_key<T> &a, const phf_key<T> &b) {
+	return phf_keycmp(&a, &b) < 0;
+}
+
+template<typename T>
+static void phf_keysort(phf_key<T> k[], const size_t n) {
+#if !PHF_NO_LIBCXX
+	if (!std::is_trivially_copyable<T>::value) {
+		std::sort(k, &k[n]);
+		return;
+	}
+#else
+	static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
+#endif
+	qsort(k, n, sizeof *k, reinterpret_cast<int(*)(const void *, const void *)>(&phf_keycmp<T>));
+} /* phf_keysort() */
 
 
 /*
@@ -528,8 +657,8 @@ PHF_PUBLIC int PHF::init(struct phf *phf, const key_t k[], const size_t n, const
 	if (r == 0 || m == 0)
 		return ERANGE;
 
-	if (!(B_k = static_cast<phf_key<key_t> *>(calloc(n1, sizeof *B_k))))
-		goto syerr;
+	if ((error = phf_calloc(&B_k, n1)))
+		goto error;
 	if (!(B_z = static_cast<size_t *>(calloc(r, sizeof *B_z))))
 		goto syerr;
 
@@ -542,7 +671,7 @@ PHF_PUBLIC int PHF::init(struct phf *phf, const key_t k[], const size_t n, const
 		++*B_k[i].n;
 	}
 
-	qsort(B_k, n1, sizeof *B_k, reinterpret_cast<int(*)(const void *, const void *)>(&phf_keycmp<key_t>));
+	phf_keysort(B_k, n1);
 
 	T_n = PHF_HOWMANY(m, PHF_BITS(*T));
 	if (!(T = static_cast<phf_bits_t *>(calloc(T_n * 2, sizeof *T))))
@@ -617,11 +746,13 @@ retry:
 	goto clean;
 syerr:
 	error = errno;
+error:
+	(void)0;
 clean:
 	free(g);
 	free(T);
 	free(B_z);
-	free(B_k);
+	phf_freearray(B_k, n1);
 
 	return error;
 } /* PHF::init() */
@@ -856,21 +987,6 @@ static phf_seed_t phf_seed(lua_State *L) {
 	return phf_g(static_cast<uint32_t>(reinterpret_cast<intptr_t>(L)), static_cast<uint32_t>(time(NULL)));
 } /* phf_seed() */
 
-template<typename T>
-static phf_error_t phf_reallocarray(T **p, size_t count) {
-	T *tmp;
-
-	if (SIZE_MAX / sizeof **p < count)
-		return ENOMEM;
-
-	if (!(tmp = static_cast<T*>(realloc(*p, count * sizeof **p))))
-		return errno;
-
-	*p = tmp;
-
-	return 0;
-} /* phf_reallocarray() */
-
 static phf_error_t phf_tokey(lua_State *L, int index, uint32_t *k) {
 	if (LUA_TNUMBER != lua_type(L, index))
 		return EINVAL;
@@ -923,30 +1039,38 @@ static phf_error_t phf_tokey(lua_State *L, int index, phf_string_t *k) {
 } /* phf_tokey() */
 
 template<typename T>
-static phf_error_t phf_addkeys(lua_State *L, int index, T **keys, int *n) {
-	int i, error = 0;
-	T *p;
+static phf_error_t phf_addkeys(lua_State *L, int index, T **_keys, size_t *_count) {
+	T *keys = *_keys, *kp;
+	size_t count, i;
+	int error;
 
-	*n = lua_rawlen(L, index);
+	/*
+	 * XXX: because of the way phf_addkeys is used in phf_new we cannot
+	 * support non-trivial types
+	 */
+	static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
 
-	if ((error = phf_reallocarray(keys, *n)))
-		return error;
+	count = lua_rawlen(L, index);
+	if (SIZE_MAX / sizeof *keys < count)
+		return ENOMEM;
+	if (!(keys = static_cast<T*>(realloc(keys, count * sizeof *keys))))
+		return errno;
 
-	p = *keys;
+	*_keys = kp = keys;
+	*_count = count;
 
-	for (i = 1; i <= *n; i++) {
+	for (i = 1; i <= count; i++) {
 		lua_rawgeti(L, index, i);
 
-		error = phf_tokey(L, -1, p++);
+		error = phf_tokey(L, -1, kp++);
 
 		lua_pop(L, 1);
 
 		if (error)
 			return error;
-
 	}
 
-	*n = PHF::uniq(*keys, *n);
+	*_count = PHF::uniq(keys, count);
 
 	return 0;
 } /* phf_addkeys() */
@@ -958,7 +1082,8 @@ static int phf_new(lua_State *L) {
 	bool nodiv = static_cast<bool>(lua_toboolean(L, 5));
 	void *keys = NULL;
 	struct phfctx *phf;
-	int n, error;
+	size_t n = 0;
+	int error;
 
 	lua_settop(L, 5);
 	luaL_checktype(L, 1, LUA_TTABLE);
@@ -1127,9 +1252,31 @@ extern "C" int luaopen_phf(lua_State *L) {
 #include <strings.h>   /* ffsl(3) */
 #include <err.h>       /* err(3) errx(3) warnx(3) */
 
+#ifndef HAVE_VALGRIND_MEMCHECK_H
+#define HAVE_VALGRIND_MEMCHECK_H __has_include(<valgrind/memcheck.h>)
+#endif
+
+#if HAVE_VALGRIND_MEMCHECK_H
+#include <valgrind/memcheck.h>
+#endif
 
 static uint32_t randomseed(void) {
-#if defined BSD /* catchall for modern BSDs, which all have arc4random */
+#if __APPLE__
+	/*
+	 * As of macOS 10.13.6 ccaes_vng_ctr_crypt and drbg_update in
+	 * libcorecrypto.dylib trigger a "Conditional jump or move on
+	 * uninitialized value(s)". As of Valgrind 3.15.0.GIT (20190214)
+	 * even when suppressed it still taints code indirectly conditioned
+	 * on the seed value.
+	 */
+	uint32_t seed = arc4random();
+	#ifdef VALGRIND_MAKE_MEM_DEFINED
+	VALGRIND_MAKE_MEM_DEFINED(&seed, sizeof seed);
+	#else
+	#warning unable to suppress CoreCrypto CSPRNG uninitialized value tainting
+	#endif
+	return seed;
+#elif defined BSD /* catchall for modern BSDs, which all have arc4random */
 	return arc4random();
 #else
 	FILE *fp;
@@ -1154,17 +1301,33 @@ static void pushkey(T **k, size_t *n, size_t *z, T kn) {
 		size_t z1 = PHF_MAX(*z, 1) * 2;
 		T *p;
 
+#if !PHF_NO_LIBCXX
+		if (!std::is_trivially_copyable<T>::value) {
+			int error;
+
+			if ((error = phf_calloc(&p, z1)))
+				errx(1, "calloc: %s", strerror(error));
+			for (size_t i = 0; i < *n; i++)
+				p[i] = std::move((*k)[i]);
+			phf_freearray(*k, *z);
+
+			goto commit;
+		}
+#else
+		static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
+#endif
 		if (z1 < *z || (SIZE_MAX / sizeof **k) < z1)
 			errx(1, "addkey: %s", strerror(ERANGE));
 
 		if (!(p = (T *)realloc(*k, z1 * sizeof **k)))
 			err(1, "realloc");
 
+commit:
 		*k = p;
 		*z = z1;
 	}
 
-	(*k)[(*n)++] = kn;
+	(*k)[(*n)++] = std::move(kn);
 } /* pushkey() */
 
 
@@ -1236,7 +1399,7 @@ static void addkeys(phf_string_t **k, size_t *n, size_t *z, FILE *fp, char **dat
 		p += buflen;
 	}
 
-	for (p = 0; p < pe; ) {
+	for (pe = p, p = 0; p < pe; ) {
 		while (p < pe && (*data)[p] == '\n')
 			p++;
 
@@ -1317,7 +1480,7 @@ static inline void exec(int argc, char **argv, size_t lambda, size_t alpha, size
 
 	phf_destroy(&phf);
 	free(data);
-	free(k);
+	phf_freearray(k, n);
 } /* exec() */
 
 static void printprimes(int argc, char **argv) {
@@ -1415,7 +1578,7 @@ int main(int argc, char **argv) {
 				"  -l NUM   number of keys per displacement map bucket (reported as g_load)\n"
 				"  -a PCT   hash table load factor (1%% - 100%%)\n"
 				"  -s SEED  random seed\n"
-				"  -t TYPE  parse and hash keys as uint32, uint64, or string\n"
+				"  -t TYPE  parse and hash keys as uint32, uint64, " PHF_IFELSE_LIBCXX("string, or std::string\n", "or string\n")
 				"  -2       avoid modular division by rounding r and m to power of 2\n"
 				"  -n       do not print key-hash pairs\n"
 				"  -v       report hashing status\n"

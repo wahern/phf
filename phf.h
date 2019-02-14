@@ -1,7 +1,7 @@
 /* ==========================================================================
  * phf.h - Tiny perfect hash function library.
  * --------------------------------------------------------------------------
- * Copyright (c) 2014-2015  William Ahern
+ * Copyright (c) 2014-2015, 2019  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -39,11 +39,15 @@
 
 #define PHF_GNUC_PREREQ(M, m) (__GNUC__ > (M) || (__GNUC__ == (M) && __GNUC_MINOR__ >= (m)))
 
-#ifdef __clang__
+#ifdef __has_extension
 #define phf_has_extension(x) __has_extension(x)
-#define phf_has_attribute(x) __has_attribute(x)
 #else
 #define phf_has_extension(x) 0
+#endif
+
+#ifdef __has_attribute
+#define phf_has_attribute(x) __has_attribute(x)
+#else
 #define phf_has_attribute(x) 0
 #endif
 
@@ -62,11 +66,11 @@
 #endif
 
 #ifndef PHF_HAVE_BUILTIN_TYPES_COMPATIBLE_P
-#define PHF_HAVE_BUILTIN_TYPES_COMPATIBLE_P (defined __GNUC__)
+#define PHF_HAVE_BUILTIN_TYPES_COMPATIBLE_P (__GNUC__ > 0)
 #endif
 
 #ifndef PHF_HAVE_BUILTIN_CHOOSE_EXPR
-#define PHF_HAVE_BUILTIN_CHOOSE_EXPR (defined __GNUC__)
+#define PHF_HAVE_BUILTIN_CHOOSE_EXPR (__GNUC__ > 0)
 #endif
 
 #ifndef PHF_HAVE_ATTRIBUTE_VISIBILITY
@@ -75,7 +79,7 @@
 #endif
 
 #ifndef PHF_HAVE_COMPUTED_GOTOS
-#define PHF_HAVE_COMPUTED_GOTOS (defined __GNUC__)
+#define PHF_HAVE_COMPUTED_GOTOS (__GNUC__ > 0)
 #endif
 
 #ifdef __clang__
