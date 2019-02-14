@@ -1,7 +1,7 @@
 /* ==========================================================================
  * phf.cc - Tiny perfect hash function library.
  * --------------------------------------------------------------------------
- * Copyright (c) 2014-2015  William Ahern
+ * Copyright (c) 2014-2015, 2019  William Ahern
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -30,9 +30,12 @@
 #include <string.h>   /* memset(3) */
 #include <errno.h>    /* errno */
 #include <assert.h>   /* assert(3) */
+
 #if !PHF_NO_LIBCXX
-#include <string>     /* std::string */
+#include <new>         /* std::nothrow */
+#include <string>      /* std::string */
 #endif
+#include <type_traits> /* std::is_standard_layout std::is_trivial */
 
 #include "phf.h"
 
@@ -64,6 +67,63 @@
 #define PHF_MAX(a, b) (((a) > (b))? (a) : (b))
 #define PHF_ROTL(x, y) (((x) << (y)) | ((x) >> (PHF_BITS(x) - (y))))
 #define PHF_COUNTOF(a) (sizeof (a) / sizeof *(a))
+
+#if PHF_NO_LIBCXX
+#define PHF_IFELSE_LIBCXX(a, b) b
+#else
+#define PHF_IFELSE_LIBCXX(a, b) a
+#endif
+
+
+/*
+ * A L L O C A T I O N  R O U T I N E S
+ *
+ * C allocation semantics in a nominally safe manner for C++.
+ *
+ * NOTE: phf.cc wasn't written as a proper C++ library, but refactored from
+ * C to C++ primarily to make use of templates for the convenience of the
+ * command-line utility, and secondarily as a C++ learning exercise.
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+template<typename T>
+static phf_error_t phf_calloc(T **p, size_t count)
+{
+#if !PHF_NO_LIBCXX
+	if (!std::is_trivially_copyable<T>::value) {
+		if (SIZE_MAX / sizeof **p < count)
+			return ENOMEM;
+
+		if (!(*p = static_cast<T*>(malloc(count * sizeof **p))))
+			return errno;
+
+		for (size_t i = 0; i < count; i++)
+			new (&(*p)[i]) T;
+
+		return 0;
+	}
+#else
+	static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
+#endif
+	if (!(*p = static_cast<T*>(calloc(count, sizeof **p))))
+		return errno;
+
+	return 0;
+} /* phf_calloc() */
+
+template<typename T>
+static void phf_freearray(T *p, size_t count)
+{
+#if !PHF_NO_LIBCXX
+	if (!std::is_trivially_destructible<T>::value) {
+		for (size_t i = 0; i < count; i++)
+			p[i].~T();
+	}
+#else
+	static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
+#endif
+	free(p);
+} /* phf_freearray() */
 
 
 /*
@@ -528,8 +588,8 @@ PHF_PUBLIC int PHF::init(struct phf *phf, const key_t k[], const size_t n, const
 	if (r == 0 || m == 0)
 		return ERANGE;
 
-	if (!(B_k = static_cast<phf_key<key_t> *>(calloc(n1, sizeof *B_k))))
-		goto syerr;
+	if ((error = phf_calloc(&B_k, n1)))
+		goto error;
 	if (!(B_z = static_cast<size_t *>(calloc(r, sizeof *B_z))))
 		goto syerr;
 
@@ -617,11 +677,13 @@ retry:
 	goto clean;
 syerr:
 	error = errno;
+error:
+	(void)0;
 clean:
 	free(g);
 	free(T);
 	free(B_z);
-	free(B_k);
+	phf_freearray(B_k, n1);
 
 	return error;
 } /* PHF::init() */
@@ -856,21 +918,6 @@ static phf_seed_t phf_seed(lua_State *L) {
 	return phf_g(static_cast<uint32_t>(reinterpret_cast<intptr_t>(L)), static_cast<uint32_t>(time(NULL)));
 } /* phf_seed() */
 
-template<typename T>
-static phf_error_t phf_reallocarray(T **p, size_t count) {
-	T *tmp;
-
-	if (SIZE_MAX / sizeof **p < count)
-		return ENOMEM;
-
-	if (!(tmp = static_cast<T*>(realloc(*p, count * sizeof **p))))
-		return errno;
-
-	*p = tmp;
-
-	return 0;
-} /* phf_reallocarray() */
-
 static phf_error_t phf_tokey(lua_State *L, int index, uint32_t *k) {
 	if (LUA_TNUMBER != lua_type(L, index))
 		return EINVAL;
@@ -923,30 +970,38 @@ static phf_error_t phf_tokey(lua_State *L, int index, phf_string_t *k) {
 } /* phf_tokey() */
 
 template<typename T>
-static phf_error_t phf_addkeys(lua_State *L, int index, T **keys, int *n) {
-	int i, error = 0;
-	T *p;
+static phf_error_t phf_addkeys(lua_State *L, int index, T **_keys, size_t *_count) {
+	T *keys = *_keys, *kp;
+	size_t count, i;
+	int error;
 
-	*n = lua_rawlen(L, index);
+	/*
+	 * XXX: because of the way phf_addkeys is used in phf_new we cannot
+	 * support non-trivial types
+	 */
+	static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
 
-	if ((error = phf_reallocarray(keys, *n)))
-		return error;
+	count = lua_rawlen(L, index);
+	if (SIZE_MAX / sizeof *keys < count)
+		return ENOMEM;
+	if (!(keys = static_cast<T*>(realloc(keys, count * sizeof *keys))))
+		return errno;
 
-	p = *keys;
+	*_keys = kp = keys;
+	*_count = count;
 
-	for (i = 1; i <= *n; i++) {
+	for (i = 1; i <= count; i++) {
 		lua_rawgeti(L, index, i);
 
-		error = phf_tokey(L, -1, p++);
+		error = phf_tokey(L, -1, kp++);
 
 		lua_pop(L, 1);
 
 		if (error)
 			return error;
-
 	}
 
-	*n = PHF::uniq(*keys, *n);
+	*_count = PHF::uniq(keys, count);
 
 	return 0;
 } /* phf_addkeys() */
@@ -958,7 +1013,8 @@ static int phf_new(lua_State *L) {
 	bool nodiv = static_cast<bool>(lua_toboolean(L, 5));
 	void *keys = NULL;
 	struct phfctx *phf;
-	int n, error;
+	size_t n;
+	int error;
 
 	lua_settop(L, 5);
 	luaL_checktype(L, 1, LUA_TTABLE);
@@ -1160,6 +1216,15 @@ static void pushkey(T **k, size_t *n, size_t *z, T kn) {
 		if (!(p = (T *)realloc(*k, z1 * sizeof **k)))
 			err(1, "realloc");
 
+#if !PHF_NO_LIBCXX
+		if (!std::is_trivially_copyable<T>::value) {
+			for (size_t i = *z; i < z1; i++)
+				new (&p[i]) T;
+		}
+#else
+		static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
+#endif
+
 		*k = p;
 		*z = z1;
 	}
@@ -1317,7 +1382,7 @@ static inline void exec(int argc, char **argv, size_t lambda, size_t alpha, size
 
 	phf_destroy(&phf);
 	free(data);
-	free(k);
+	phf_freearray(k, n);
 } /* exec() */
 
 static void printprimes(int argc, char **argv) {
@@ -1415,7 +1480,7 @@ int main(int argc, char **argv) {
 				"  -l NUM   number of keys per displacement map bucket (reported as g_load)\n"
 				"  -a PCT   hash table load factor (1%% - 100%%)\n"
 				"  -s SEED  random seed\n"
-				"  -t TYPE  parse and hash keys as uint32, uint64, or string\n"
+				"  -t TYPE  parse and hash keys as uint32, uint64, " PHF_IFELSE_LIBCXX("string, or std::string\n", "or string\n")
 				"  -2       avoid modular division by rounding r and m to power of 2\n"
 				"  -n       do not print key-hash pairs\n"
 				"  -v       report hashing status\n"
