@@ -32,21 +32,26 @@
 #include <assert.h>   /* assert(3) */
 
 #if !PHF_NO_LIBCXX
+#include <algorithm>   /* std::sort */
+#include <iterator>    /* std::begin std::end */
 #include <new>         /* std::nothrow */
 #include <string>      /* std::string */
 #endif
 #include <type_traits> /* std::is_standard_layout std::is_trivial */
+#include <utility>     /* std::move */
 
 #include "phf.h"
 
 
 #ifdef __clang__
 #pragma clang diagnostic ignored "-Wunused-function"
+#pragma clang diagnostic ignored "-Wunused-label"
 #if __cplusplus < 201103L
 #pragma clang diagnostic ignored "-Wc++11-long-long"
 #endif
 #elif PHF_GNUC_PREREQ(4, 6)
 #pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wunused-label"
 #if __cplusplus < 201103L
 #pragma GCC diagnostic ignored "-Wlong-long"
 #pragma GCC diagnostic ignored "-Wformat" // %zu
@@ -122,6 +127,7 @@ static void phf_freearray(T *p, size_t count)
 #else
 	static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
 #endif
+	(void)count;
 	free(p);
 } /* phf_freearray() */
 
@@ -316,6 +322,20 @@ namespace PHF {
 				return 1;
 			return 0;
 		} /* cmp<phf_string_t>() */
+
+		template<typename T>
+		static void sort(T k[], const size_t n) {
+
+#if !PHF_NO_LIBCXX
+			if (!std::is_trivially_copyable<T>::value) {
+				std::sort(k, &k[n]);
+				return;
+			}
+#else
+			static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
+#endif
+			qsort(k, n, sizeof *k, reinterpret_cast<int(*)(const void *, const void *)>(&cmp<T>));
+		} /* sort() */
 	} /* Uniq:: */
 } /* PHF:: */
 
@@ -324,7 +344,7 @@ PHF_PUBLIC size_t PHF::uniq(key_t k[], const size_t n) {
 	using namespace PHF::Uniq;
 	size_t i, j;
 
-	qsort(k, n, sizeof *k, reinterpret_cast<int(*)(const void *, const void *)>(&cmp<key_t>));
+	sort<key_t>(k, n);
 
 	for (i = 1, j = 0; i < n; i++) {
 		if (k[i] != k[j])
@@ -521,6 +541,20 @@ static bool operator==(const phf_string_t &a, const phf_string_t &b) {
 	return a.n == b.n && 0 == memcmp(a.p, b.p, a.n);
 }
 
+static bool operator<(const phf_string_t &a, const phf_string_t &b) {
+	int cmp = memcmp(a.p, b.p, PHF_MIN(a.n, b.n));
+	if (cmp)
+		return cmp < 0;
+	return a.n < b.n;
+}
+
+static bool operator>(const phf_string_t &a, const phf_string_t &b) {
+	int cmp = memcmp(a.p, b.p, PHF_MIN(a.n, b.n));
+	if (cmp)
+		return cmp > 0;
+	return a.n > b.n;
+}
+
 template<typename T>
 struct phf_key {
 	T k;
@@ -547,6 +581,29 @@ static int phf_keycmp(const phf_key<T> *a, const phf_key<T> *b) {
 
 	return 0;
 } /* phf_keycmp() */
+
+template<typename T>
+static bool operator>(const phf_key<T> &a, const phf_key<T> &b) {
+	return phf_keycmp(&a, &b) > 0;
+}
+
+template<typename T>
+static bool operator<(const phf_key<T> &a, const phf_key<T> &b) {
+	return phf_keycmp(&a, &b) < 0;
+}
+
+template<typename T>
+static void phf_keysort(phf_key<T> k[], const size_t n) {
+#if !PHF_NO_LIBCXX
+	if (!std::is_trivially_copyable<T>::value) {
+		std::sort(k, &k[n]);
+		return;
+	}
+#else
+	static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
+#endif
+	qsort(k, n, sizeof *k, reinterpret_cast<int(*)(const void *, const void *)>(&phf_keycmp<T>));
+} /* phf_keysort() */
 
 
 /*
@@ -602,7 +659,7 @@ PHF_PUBLIC int PHF::init(struct phf *phf, const key_t k[], const size_t n, const
 		++*B_k[i].n;
 	}
 
-	qsort(B_k, n1, sizeof *B_k, reinterpret_cast<int(*)(const void *, const void *)>(&phf_keycmp<key_t>));
+	phf_keysort(B_k, n1);
 
 	T_n = PHF_HOWMANY(m, PHF_BITS(*T));
 	if (!(T = static_cast<phf_bits_t *>(calloc(T_n * 2, sizeof *T))))
@@ -1210,26 +1267,33 @@ static void pushkey(T **k, size_t *n, size_t *z, T kn) {
 		size_t z1 = PHF_MAX(*z, 1) * 2;
 		T *p;
 
+#if !PHF_NO_LIBCXX
+		if (!std::is_trivially_copyable<T>::value) {
+			int error;
+
+			if ((error = phf_calloc(&p, z1)))
+				errx(1, "calloc: %s", strerror(error));
+			for (size_t i = 0; i < *n; i++)
+				p[i] = std::move((*k)[i]);
+			phf_freearray(*k, *z);
+
+			goto commit;
+		}
+#else
+		static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
+#endif
 		if (z1 < *z || (SIZE_MAX / sizeof **k) < z1)
 			errx(1, "addkey: %s", strerror(ERANGE));
 
 		if (!(p = (T *)realloc(*k, z1 * sizeof **k)))
 			err(1, "realloc");
 
-#if !PHF_NO_LIBCXX
-		if (!std::is_trivially_copyable<T>::value) {
-			for (size_t i = *z; i < z1; i++)
-				new (&p[i]) T;
-		}
-#else
-		static_assert(std::is_standard_layout<T>::value && std::is_trivial<T>::value, "compiled without C++ runtime support");
-#endif
-
+commit:
 		*k = p;
 		*z = z1;
 	}
 
-	(*k)[(*n)++] = kn;
+	(*k)[(*n)++] = std::move(kn);
 } /* pushkey() */
 
 
