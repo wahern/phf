@@ -1301,7 +1301,7 @@ static void addkeys(phf_string_t **k, size_t *n, size_t *z, FILE *fp, char **dat
 		p += buflen;
 	}
 
-	for (p = 0; p < pe; ) {
+	for (pe = p, p = 0; p < pe; ) {
 		while (p < pe && (*data)[p] == '\n')
 			p++;
 
