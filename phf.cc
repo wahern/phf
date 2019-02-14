@@ -1240,9 +1240,31 @@ extern "C" int luaopen_phf(lua_State *L) {
 #include <strings.h>   /* ffsl(3) */
 #include <err.h>       /* err(3) errx(3) warnx(3) */
 
+#ifndef HAVE_VALGRIND_MEMCHECK_H
+#define HAVE_VALGRIND_MEMCHECK_H __has_include(<valgrind/memcheck.h>)
+#endif
+
+#if HAVE_VALGRIND_MEMCHECK_H
+#include <valgrind/memcheck.h>
+#endif
 
 static uint32_t randomseed(void) {
-#if defined BSD /* catchall for modern BSDs, which all have arc4random */
+#if __APPLE__
+	/*
+	 * As of macOS 10.13.6 ccaes_vng_ctr_crypt and drbg_update in
+	 * libcorecrypto.dylib trigger a "Conditional jump or move on
+	 * uninitialized value(s)". As of Valgrind 3.15.0.GIT (20190214)
+	 * even when suppressed it still taints code indirectly conditioned
+	 * on the seed value.
+	 */
+	uint32_t seed = arc4random();
+	#ifdef VALGRIND_MAKE_MEM_DEFINED
+	VALGRIND_MAKE_MEM_DEFINED(&seed, sizeof seed);
+	#else
+	#warning unable to suppress CoreCrypto CSPRNG uninitialized value tainting
+	#endif
+	return seed;
+#elif defined BSD /* catchall for modern BSDs, which all have arc4random */
 	return arc4random();
 #else
 	FILE *fp;
