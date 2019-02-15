@@ -234,7 +234,7 @@ static inline bool phf_rabinmiller(uint64_t n) {
 	}
 
 	/* NB: witness a must be 1 <= a < n */
-	if (n < 2027)
+	if (n < 2047)
 		return phf_witness(n, 2, s, t);
 
 	for (i = 0; i < PHF_COUNTOF(witness); i++) {
@@ -246,7 +246,7 @@ static inline bool phf_rabinmiller(uint64_t n) {
 } /* phf_rabinmiller() */
 
 static inline bool phf_isprime(size_t n) {
-	static const char map[] = { 0, 1, 2, 3, 0, 5, 0, 7 };
+	static const char map[] = { 0, 0, 2, 3, 0, 5, 0, 7 };
 	size_t i;
 
 	if (n < PHF_COUNTOF(map))
